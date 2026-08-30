@@ -1,0 +1,8 @@
+{
+  "name": "Website Personal Jaenal Maskun",
+  "description": "Website personal profesional, elegan, dan ikonik bernuansa madrasah dan pendidikan Islam modern.",
+  "requestFramePermissions": [],
+  "majorCapabilities": [
+    "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"
+  ]
+}

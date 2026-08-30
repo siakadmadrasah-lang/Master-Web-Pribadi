@@ -1,0 +1,11 @@
+{
+  "host": "localhost",
+  "user": "jaenal_masterweb",
+  "password": "masbagus15",
+  "database": "jaenal_masterweb",
+  "port": 3306,
+  "connectTimeout": 5000,
+  "waitForConnections": true,
+  "connectionLimit": 10,
+  "queueLimit": 0
+}
