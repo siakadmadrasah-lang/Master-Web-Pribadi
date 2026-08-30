@@ -66,12 +66,12 @@ class BackgroundMediaManager {
   private audioGain: GainNode | null = null;
   private audioOsc: OscillatorNode | null = null;
 
-  // Ultra-lightweight static 44-byte silent WAV audio anchor fallback
+  private static readonly SILENT_MP3_DATA_URI = 'data:audio/mp3;base64,//OExAAAAANIAAAAAExBTUUzLjEwMFVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVV';
   private static readonly SILENT_WAV_DATA_URI = 'data:audio/wav;base64,UklGRigAAABXQVZFZm10IBIAAAABAAEARKwAAIhYAQACABAAAABkYXRhAgAAAAEA';
 
-  private generateSilentWavBlobUrl(durationSeconds: number = 5): string {
+  private generateSilentWavBlobUrl(durationSeconds: number = 30): string {
     try {
-      const sampleRate = 8000; // 8kHz mono is ultra light: 8000 * 5 * 2 = 80 KB
+      const sampleRate = 8000; // 8kHz mono is ultra light
       const numChannels = 1;
       const bitsPerSample = 16;
       const blockAlign = (numChannels * bitsPerSample) / 8;
@@ -172,12 +172,13 @@ class BackgroundMediaManager {
       if (!this.silentAudioElement) {
         const audio = new Audio();
         audio.loop = true;
-        audio.volume = 0.05;
+        audio.volume = 0.01;
         audio.preload = 'auto';
         audio.setAttribute('playsinline', 'true');
         audio.setAttribute('webkit-playsinline', 'true');
+        audio.src = this.generateSilentWavBlobUrl(30);
 
-        // Prefer live MediaStreamDestination (infinite duration stream prevents OS capsule dismissal)
+        // Also setup web audio oscillator keepalive
         try {
           const AudioContextClass = window.AudioContext || (window as any).webkitAudioContext;
           if (AudioContextClass) {
@@ -194,16 +195,11 @@ class BackgroundMediaManager {
               gain.connect(dest);
               gain.connect(ctx.destination);
               osc.start();
-              audio.srcObject = dest.stream;
               this.audioOsc = osc;
               this.audioGain = gain;
             }
           }
         } catch (e) {}
-
-        if (!audio.srcObject) {
-          audio.src = this.generateSilentWavBlobUrl(10);
-        }
 
         this.silentAudioElement = audio;
       }
