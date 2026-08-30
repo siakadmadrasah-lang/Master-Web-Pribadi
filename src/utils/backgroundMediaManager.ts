@@ -60,6 +60,7 @@ class BackgroundMediaManager {
   private silentAudioElement: HTMLAudioElement | null = null;
   private activeMediaElement: HTMLMediaElement | null = null;
   private mediaElementListeners: { [key: string]: EventListener } = {};
+  private playLockUntil: number = 0;
 
   private audioCtx: AudioContext | null = null;
   private audioGain: GainNode | null = null;
@@ -169,13 +170,41 @@ class BackgroundMediaManager {
     if (typeof window === 'undefined') return;
     try {
       if (!this.silentAudioElement) {
-        const wavUrl = this.generateSilentWavBlobUrl(5);
-        const audio = new Audio(wavUrl);
+        const audio = new Audio();
         audio.loop = true;
         audio.volume = 0.05;
         audio.preload = 'auto';
         audio.setAttribute('playsinline', 'true');
         audio.setAttribute('webkit-playsinline', 'true');
+
+        // Prefer live MediaStreamDestination (infinite duration stream prevents OS capsule dismissal)
+        try {
+          const AudioContextClass = window.AudioContext || (window as any).webkitAudioContext;
+          if (AudioContextClass) {
+            const ctx = this.audioCtx || new AudioContextClass();
+            this.audioCtx = ctx;
+            if (typeof ctx.createMediaStreamDestination === 'function') {
+              const dest = ctx.createMediaStreamDestination();
+              const osc = ctx.createOscillator();
+              const gain = ctx.createGain();
+              osc.type = 'sine';
+              osc.frequency.setValueAtTime(40, ctx.currentTime);
+              gain.gain.setValueAtTime(0.0001, ctx.currentTime);
+              osc.connect(gain);
+              gain.connect(dest);
+              gain.connect(ctx.destination);
+              osc.start();
+              audio.srcObject = dest.stream;
+              this.audioOsc = osc;
+              this.audioGain = gain;
+            }
+          }
+        } catch (e) {}
+
+        if (!audio.srcObject) {
+          audio.src = this.generateSilentWavBlobUrl(10);
+        }
+
         this.silentAudioElement = audio;
       }
     } catch (e) {}
@@ -470,6 +499,14 @@ class BackgroundMediaManager {
       this.updateMediaSessionState('playing');
     } else if (playerState === 2) {
       // PAUSED
+      // If user recently requested play, keep playing state and retry iframe play to prevent Magic Capsule dismissal
+      if (Date.now() < this.playLockUntil) {
+        this.sendCommandToIframe('unMute', []);
+        this.sendCommandToIframe('setVolume', [100]);
+        this.sendCommandToIframe('playVideo', []);
+        this.updateMediaSessionState('playing');
+        return;
+      }
       if (typeof document !== 'undefined' && document.hidden && this.state.isBackgroundPlayEnabled) {
         this.state.isPlaying = true;
         this.state.isCapsuleVisible = true;
@@ -483,13 +520,18 @@ class BackgroundMediaManager {
       this.updateMediaSessionState('paused');
     } else if (playerState === 0) {
       // ENDED
+      if (Date.now() < this.playLockUntil) {
+        return;
+      }
       this.state.isPlaying = false;
       this.releaseWakeLock();
       this.updateMediaSessionState('paused');
-    } else if (playerState === 3) {
-      // BUFFERING
-      this.state.isPlaying = true;
-      this.updateMediaSessionState('playing');
+    } else if (playerState === 3 || playerState === 5 || playerState === -1) {
+      // BUFFERING or CUED or UNSTARTED
+      if (this.state.isPlaying || Date.now() < this.playLockUntil) {
+        this.state.isPlaying = true;
+        this.updateMediaSessionState('playing');
+      }
     }
     this.syncYouTubeTime();
     this.notify();
@@ -788,6 +830,7 @@ class BackgroundMediaManager {
     this.state.volume = 100;
     this.state.currentTime = track.currentTime || 0;
     this.state.duration = track.duration || 360;
+    this.playLockUntil = Date.now() + 4000;
 
     this.updateMediaSessionMetadata(track);
     this.updateMediaSessionState('playing');
@@ -840,6 +883,7 @@ class BackgroundMediaManager {
     this.state.isCapsuleVisible = true;
     this.state.isMuted = false;
     this.state.volume = 100;
+    this.playLockUntil = Date.now() + 4000;
 
     this.updateMediaSessionState('playing');
     this.updateMediaSessionPosition();

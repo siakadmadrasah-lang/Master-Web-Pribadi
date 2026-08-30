@@ -139,10 +139,11 @@ export function parseVideoUrl(url?: string): ParsedVideo | null {
   const ytVideoId = extractYouTubeId(cleanUrl);
   if (ytVideoId) {
     const isShorts = cleanUrl.includes('/shorts/');
+    const originParam = typeof window !== 'undefined' && window.location?.origin ? `&origin=${encodeURIComponent(window.location.origin)}` : '';
     return {
       type: 'youtube',
       videoId: ytVideoId,
-      embedUrl: `https://www.youtube.com/embed/${ytVideoId}?autoplay=1&playsinline=1&enablejsapi=1&rel=0&modestbranding=1&controls=1`,
+      embedUrl: `https://www.youtube.com/embed/${ytVideoId}?autoplay=1&playsinline=1&enablejsapi=1&rel=0&modestbranding=1&controls=1${originParam}`,
       thumbnailUrl: `https://img.youtube.com/vi/${ytVideoId}/hqdefault.jpg`,
       originalUrl: cleanUrl,
       platformName: isShorts ? 'YouTube Shorts' : 'YouTube Video',
@@ -155,8 +156,9 @@ export function parseVideoUrl(url?: string): ParsedVideo | null {
   if (isYouTubeChannelUrl(cleanUrl)) {
     const handle = getYouTubeChannelHandle(cleanUrl);
     const rawUsername = handle ? handle.replace(/^@/, '') : 'channel';
+    const originParam = typeof window !== 'undefined' && window.location?.origin ? `&origin=${encodeURIComponent(window.location.origin)}` : '';
     // User uploads playlist embed works seamlessly in iframe:
-    const embedPlaylist = `https://www.youtube-nocookie.com/embed?listType=user_uploads&list=${rawUsername}&enablejsapi=1&playsinline=1`;
+    const embedPlaylist = `https://www.youtube-nocookie.com/embed?listType=user_uploads&list=${rawUsername}&enablejsapi=1&playsinline=1${originParam}`;
     return {
       type: 'youtube',
       embedUrl: embedPlaylist,

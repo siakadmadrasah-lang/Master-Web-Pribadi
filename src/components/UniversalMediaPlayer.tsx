@@ -747,11 +747,13 @@ export const UniversalMediaPlayer: React.FC<UniversalMediaPlayerProps> = ({
                     <iframe
                       id={iframePlayerId.current}
                       ref={iframeRef}
-                      src={
-                        parsed.embedUrl.includes('enablejsapi=1')
-                          ? parsed.embedUrl
-                          : `${parsed.embedUrl}${parsed.embedUrl.includes('?') ? '&' : '?'}enablejsapi=1&playsinline=1`
-                      }
+                      src={(() => {
+                        const originParam = typeof window !== 'undefined' && window.location?.origin ? `&origin=${encodeURIComponent(window.location.origin)}` : '';
+                        if (parsed.embedUrl.includes('enablejsapi=1')) {
+                          return parsed.embedUrl.includes('origin=') ? parsed.embedUrl : `${parsed.embedUrl}${originParam}`;
+                        }
+                        return `${parsed.embedUrl}${parsed.embedUrl.includes('?') ? '&' : '?'}enablejsapi=1&playsinline=1${originParam}`;
+                      })()}
                       title={currentTitle}
                       className="w-full h-full border-0"
                       allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share; fullscreen"
