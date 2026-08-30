@@ -435,7 +435,7 @@ export const MediaChannelSection: React.FC<MediaChannelSectionProps> = ({
                             url={currentSpotlightUrl}
                             title={currentSpotlightVideo.title}
                             autoPlay={true}
-                            showShareControls={false}
+                            showShareControls={true}
                           />
                         </div>
                       ) : (
@@ -468,7 +468,25 @@ export const MediaChannelSection: React.FC<MediaChannelSectionProps> = ({
                               <div className="text-center">
                                 <button
                                   type="button"
-                                  onClick={() => setIsInlinePlaying(true)}
+                                  onClick={() => {
+                                    setIsInlinePlaying(true);
+                                    backgroundMedia.registerActiveTrack(
+                                      {
+                                        id: currentSpotlightVideo.id || currentSpotlightVideo.videoId || String(selectedSpotlightIndex),
+                                        title: currentSpotlightVideo.title,
+                                        artist: currentSpotlightVideo.channelName || 'Ust. Jaenal Maskun, S.Pd.I.',
+                                        album: 'Kanal Media Digital Madrasah',
+                                        artworkUrl: currentSpotlightVideo.thumbnail || currentSpotlightVideo.thumbnailUrl || (currentSpotlightVideo.videoId ? `https://img.youtube.com/vi/${currentSpotlightVideo.videoId}/hqdefault.jpg` : undefined),
+                                        videoUrl: currentSpotlightUrl,
+                                        platform: parsedCurrentSpotlight?.platformName || currentSpotlightVideo.platform || 'YouTube',
+                                      },
+                                      (parsedCurrentSpotlight?.type as any) || 'youtube'
+                                    );
+                                    backgroundMedia.warmupAudio();
+                                    backgroundMedia.setVolume(100);
+                                    backgroundMedia.setCapsuleVisible(true);
+                                    backgroundMedia.play();
+                                  }}
                                   className={`w-16 h-16 sm:w-20 sm:h-20 rounded-full inline-flex items-center justify-center shadow-2xl hover:scale-110 transition-all cursor-pointer group-hover:ring-4 ${
                                     parsedCurrentSpotlight?.type === 'tiktok'
                                       ? 'bg-gradient-to-r from-cyan-400 to-pink-500 text-slate-950 shadow-cyan-500/40 group-hover:ring-cyan-400/40'
