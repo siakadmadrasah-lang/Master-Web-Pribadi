@@ -235,14 +235,20 @@ export const downloadCpanelPackageZip = async (
   footerConfig?: StickyFooterConfig,
   onProgress?: (percent: number, message: string) => void
 ): Promise<Blob> => {
-  if (onProgress) onProgress(25, 'Mengunduh paket ZIP cPanel dari server...');
+  if (onProgress) onProgress(25, 'Menyiapkan paket ZIP cPanel...');
   try {
-    const response = await fetch('/api/export-cpanel-zip');
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), 3500);
+    const response = await fetch('/api/export-cpanel-zip', { signal: controller.signal });
+    clearTimeout(timer);
     if (response.ok) {
-      if (onProgress) onProgress(85, 'Menyelesaikan paket cPanel ZIP...');
-      const blob = await response.blob();
-      if (onProgress) onProgress(100, 'Paket ZIP Hosting cPanel siap diunduh!');
-      return blob;
+      const contentType = response.headers.get('content-type') || '';
+      if (contentType.includes('zip') || contentType.includes('octet-stream')) {
+        if (onProgress) onProgress(85, 'Menyelesaikan paket cPanel ZIP...');
+        const blob = await response.blob();
+        if (onProgress) onProgress(100, 'Paket ZIP Hosting cPanel siap diunduh!');
+        return blob;
+      }
     }
   } catch (e) {
     console.warn('Server cPanel export fallback to client-side generation', e);

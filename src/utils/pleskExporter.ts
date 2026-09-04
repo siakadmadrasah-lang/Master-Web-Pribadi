@@ -1820,15 +1820,21 @@ export const downloadPleskPackageZip = async (
   footerConfig?: StickyFooterConfig,
   onProgress?: (percent: number, message: string) => void
 ): Promise<Blob> => {
-  // Always fetch the complete ZIP from the server endpoint which contains the bundled dist
-  if (onProgress) onProgress(30, 'Mengunduh paket ZIP terkompilasi dari server...');
+  // Attempt server fetch with timeout, safely fallback to client generation
+  if (onProgress) onProgress(30, 'Menyiapkan paket ZIP Plesk...');
   try {
-    const response = await fetch('/api/export-plesk-zip');
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), 3500);
+    const response = await fetch('/api/export-plesk-zip', { signal: controller.signal });
+    clearTimeout(timer);
     if (response.ok) {
-      if (onProgress) onProgress(90, 'Menyelesaikan paket ZIP...');
-      const blob = await response.blob();
-      if (onProgress) onProgress(100, 'Paket ZIP Hosting Plesk siap diunduh!');
-      return blob;
+      const contentType = response.headers.get('content-type') || '';
+      if (contentType.includes('zip') || contentType.includes('octet-stream')) {
+        if (onProgress) onProgress(90, 'Menyelesaikan paket ZIP...');
+        const blob = await response.blob();
+        if (onProgress) onProgress(100, 'Paket ZIP Hosting Plesk siap diunduh!');
+        return blob;
+      }
     }
   } catch (e) {
     console.warn('Fallback generating client zip', e);
