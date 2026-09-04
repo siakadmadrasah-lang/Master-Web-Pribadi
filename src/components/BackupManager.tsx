@@ -29,12 +29,16 @@ import {
   Globe,
   FolderArchive,
   FileCode2,
-  Image as ImageIcon
+  Image as ImageIcon,
+  FolderUp,
+  Camera,
+  Smartphone
 } from 'lucide-react';
 import { BackupSnapshot, BackupStats, FullBackupBundle, SiteContentConfig, HeaderLogoConfig, StickyFooterConfig } from '../types';
 import { downloadPleskPackageZip, triggerZipDownload } from '../utils/pleskExporter';
 import { downloadCpanelPackageZip } from '../utils/cpanelExporter';
 import { generateDatabaseSql } from '../utils/sqlGenerator';
+import { embedMediaInSiteData, base64ToUint8Array, deepResolveMediaUrls, collectAllMediaAssetsForZip } from '../utils/mediaBackupHelper';
 
 interface BackupManagerProps {
   onDataRestored?: (restoredData: any) => void;
@@ -139,6 +143,8 @@ export const BackupManager: React.FC<BackupManagerProps> = ({
   // Export progress
   const [isDownloadingJson, setIsDownloadingJson] = useState(false);
   const [isDownloadingZip, setIsDownloadingZip] = useState(false);
+  const [backupStatusText, setBackupStatusText] = useState<string | null>(null);
+  const [previewAvatar, setPreviewAvatar] = useState<string | null>(null);
   const [isDownloadingCpanelZip, setIsDownloadingCpanelZip] = useState(false);
   const [isExportingPlesk, setIsExportingPlesk] = useState(false);
   const [pleskProgress, setPleskProgress] = useState<{ percent: number; message: string } | null>(null);
@@ -271,16 +277,62 @@ export const BackupManager: React.FC<BackupManagerProps> = ({
 
         const parsed = JSON.parse(jsonContentStr);
 
-        // Count media files in uploads/
+        // Extract media files in uploads/ into Base64 map
+        const zipMediaMap: Record<string, string> = {};
         let mediaFilesCount = 0;
         for (const [path, entry] of Object.entries(zip.files)) {
           if (!entry.dir && (path.startsWith('uploads/') || path.startsWith('data/uploads/') || path.includes('/uploads/'))) {
-            mediaFilesCount++;
+            const fileName = path.split('/').pop() || '';
+            if (fileName && !fileName.startsWith('.')) {
+              mediaFilesCount++;
+              try {
+                const base64Str = await entry.async('base64');
+                let mime = 'image/jpeg';
+                const lower = fileName.toLowerCase();
+                if (lower.endsWith('.png')) mime = 'image/png';
+                else if (lower.endsWith('.webp')) mime = 'image/webp';
+                else if (lower.endsWith('.svg')) mime = 'image/svg+xml';
+                else if (lower.endsWith('.gif')) mime = 'image/gif';
+
+                const dataUrl = `data:${mime};base64,${base64Str}`;
+                zipMediaMap[fileName] = dataUrl;
+                zipMediaMap[`/uploads/${fileName}`] = dataUrl;
+                zipMediaMap[`uploads/${fileName}`] = dataUrl;
+                zipMediaMap[`assets/uploads/${fileName}`] = dataUrl;
+                zipMediaMap[`/assets/uploads/${fileName}`] = dataUrl;
+              } catch (e) {}
+            }
           }
         }
 
-        const dataContent = parsed.data?.siteContent || parsed.siteContent || (parsed.profile ? parsed : null);
+        let dataContent = parsed.data?.siteContent || parsed.siteContent || (parsed.profile ? parsed : null);
+
+        // If ZIP has media files, resolve relative URLs to Base64 data URLs for seamless offline/Android display
+        if (Object.keys(zipMediaMap).length > 0) {
+          if (dataContent) {
+            dataContent = deepResolveMediaUrls(dataContent, zipMediaMap);
+          }
+          if (parsed.logoConfig) {
+            parsed.logoConfig = deepResolveMediaUrls(parsed.logoConfig, zipMediaMap);
+          }
+          if (parsed.data?.logoConfig) {
+            parsed.data.logoConfig = deepResolveMediaUrls(parsed.data.logoConfig, zipMediaMap);
+          }
+          if (parsed.stickyFooterConfig) {
+            parsed.stickyFooterConfig = deepResolveMediaUrls(parsed.stickyFooterConfig, zipMediaMap);
+          }
+          if (parsed.data?.stickyFooterConfig) {
+            parsed.data.stickyFooterConfig = deepResolveMediaUrls(parsed.data.stickyFooterConfig, zipMediaMap);
+          }
+        }
+
         const content = dataContent || {};
+        if (content.profile?.avatarUrl) {
+          setPreviewAvatar(content.profile.avatarUrl);
+        } else {
+          setPreviewAvatar(null);
+        }
+
         const stats: BackupStats & { mediaCount?: number; fileTypeDesc?: string } = {
           publicationsCount: Array.isArray(content.publications) ? content.publications.length : 0,
           agendasCount: Array.isArray(content.agenda) ? content.agenda.length : 0,
@@ -296,12 +348,17 @@ export const BackupManager: React.FC<BackupManagerProps> = ({
 
         setParsedRestoreData({
           ...parsed,
+          data: {
+            ...parsed.data,
+            siteContent: dataContent
+          },
+          siteContent: dataContent,
           _fileType: 'zip',
           _mediaFilesCount: mediaFilesCount,
           _zipSourceFile: file
         });
         setRestoreStats(stats);
-        setRestoreSuccessMsg(`Paket ZIP berhasil diverifikasi! Ditemukan konfigurasi web & ${mediaFilesCount} berkas media.`);
+        setRestoreSuccessMsg(`Paket ZIP berhasil diverifikasi! Ditemukan konfigurasi web & ${mediaFilesCount} berkas media terintegrasi.`);
       } catch (err: any) {
         setRestoreError(`Gagal membaca berkas ZIP: ${err.message || 'Format arsip tidak valid'}`);
       }
@@ -327,6 +384,29 @@ export const BackupManager: React.FC<BackupManagerProps> = ({
       const dataContent = parsedJson.data?.siteContent || parsedJson.siteContent || (parsedJson.profile ? parsedJson : null);
       if (dataContent || parsedJson.logoConfig || parsedJson.stickyFooterConfig) {
         const content = dataContent || {};
+        
+        // Count embedded Base64 media in JSON
+        let embeddedMediaCount = 0;
+        if (content.profile?.avatarUrl?.startsWith('data:image/')) embeddedMediaCount++;
+        if (content.heroSettings?.heroImage?.startsWith('data:image/')) embeddedMediaCount++;
+        if (Array.isArray(content.gallery)) {
+          embeddedMediaCount += content.gallery.filter((g: any) => g?.imageUrl?.startsWith('data:image/')).length;
+        }
+        if (Array.isArray(content.publications)) {
+          embeddedMediaCount += content.publications.filter((p: any) => p?.coverUrl?.startsWith('data:image/')).length;
+        }
+        if (Array.isArray(content.agenda)) {
+          embeddedMediaCount += content.agenda.filter((a: any) => a?.flyerUrl?.startsWith('data:image/')).length;
+        }
+        if (parsedJson.logoConfig?.logoUrl?.startsWith('data:image/')) embeddedMediaCount++;
+        if (parsedJson.data?.logoConfig?.logoUrl?.startsWith('data:image/')) embeddedMediaCount++;
+
+        if (content.profile?.avatarUrl) {
+          setPreviewAvatar(content.profile.avatarUrl);
+        } else {
+          setPreviewAvatar(null);
+        }
+
         const stats: BackupStats & { mediaCount?: number; fileTypeDesc?: string } = {
           publicationsCount: Array.isArray(content.publications) ? content.publications.length : 0,
           agendasCount: Array.isArray(content.agenda) ? content.agenda.length : 0,
@@ -336,7 +416,8 @@ export const BackupManager: React.FC<BackupManagerProps> = ({
           quotesCount: Array.isArray(content.quotes) ? content.quotes.length : 0,
           educationCount: Array.isArray(content.education) ? content.education.length : 0,
           experienceCount: Array.isArray(content.experience) ? content.experience.length : (Array.isArray(content.experiences) ? content.experiences.length : 0),
-          fileTypeDesc: 'Berkas Cadangan JSON'
+          mediaCount: embeddedMediaCount,
+          fileTypeDesc: embeddedMediaCount > 0 ? `Berkas Cadangan JSON (${embeddedMediaCount} Foto Tersemat)` : 'Berkas Cadangan JSON'
         };
 
         setParsedRestoreData({
@@ -344,7 +425,7 @@ export const BackupManager: React.FC<BackupManagerProps> = ({
           _fileType: 'json'
         });
         setRestoreStats(stats);
-        setRestoreSuccessMsg('Berkas JSON berhasil diverifikasi dan siap dipulihkan!');
+        setRestoreSuccessMsg(`Berkas JSON berhasil diverifikasi! ${embeddedMediaCount > 0 ? `${embeddedMediaCount} foto/media tersemat & siap dipulihkan ke Android/PC.` : 'Siap dipulihkan.'}`);
         return;
       }
     }
@@ -354,6 +435,13 @@ export const BackupManager: React.FC<BackupManagerProps> = ({
     if (extractedSql) {
       const dataContent = extractedSql.data?.siteContent || extractedSql.siteContent || extractedSql;
       const content = dataContent || {};
+
+      if (content.profile?.avatarUrl) {
+        setPreviewAvatar(content.profile.avatarUrl);
+      } else {
+        setPreviewAvatar(null);
+      }
+
       const stats: BackupStats & { mediaCount?: number; fileTypeDesc?: string } = {
         publicationsCount: Array.isArray(content.publications) ? content.publications.length : 0,
         agendasCount: Array.isArray(content.agenda) ? content.agenda.length : 0,
@@ -494,9 +582,27 @@ export const BackupManager: React.FC<BackupManagerProps> = ({
         setRestoreSuccessMsg(resultData.message || 'Data website berhasil dipulihkan!');
 
         const restoredObj = resultData.restoredData || parsedRestoreData.data || parsedRestoreData;
-        const finalContent = restoredObj.siteContent || (restoredObj.profile ? restoredObj : null);
-        const finalLogo = restoredObj.logoConfig;
-        const finalFooter = restoredObj.stickyFooterConfig;
+        let finalContent = restoredObj.siteContent || (restoredObj.profile ? restoredObj : null);
+        let finalLogo = restoredObj.logoConfig || parsedRestoreData.logoConfig || parsedRestoreData.data?.logoConfig;
+        let finalFooter = restoredObj.stickyFooterConfig || parsedRestoreData.stickyFooterConfig || parsedRestoreData.data?.stickyFooterConfig;
+
+        // Ensure resolved Base64 photos from parsedRestoreData are preserved on Android/offline
+        const parsedContent = parsedRestoreData.data?.siteContent || parsedRestoreData.siteContent || (parsedRestoreData.profile ? parsedRestoreData : null);
+        if (parsedContent && finalContent) {
+          if (parsedContent.profile?.avatarUrl?.startsWith('data:image/')) {
+            finalContent.profile = { ...finalContent.profile, avatarUrl: parsedContent.profile.avatarUrl };
+          }
+          if (parsedContent.heroSettings?.heroImage?.startsWith('data:image/')) {
+            finalContent.heroSettings = { ...finalContent.heroSettings, heroImage: parsedContent.heroSettings.heroImage };
+          }
+          if (Array.isArray(parsedContent.gallery) && Array.isArray(finalContent.gallery)) {
+            parsedContent.gallery.forEach((pg: any, i: number) => {
+              if (pg?.imageUrl?.startsWith('data:image/') && finalContent.gallery[i]) {
+                finalContent.gallery[i].imageUrl = pg.imageUrl;
+              }
+            });
+          }
+        }
 
         // Persist to local storage immediately
         if (finalContent) {
@@ -599,9 +705,10 @@ export const BackupManager: React.FC<BackupManagerProps> = ({
     }
   };
 
-  // Handler: Download JSON Backup (Instant & Fail-safe)
+  // Handler: Download JSON Backup (Instant, Self-Contained with Photos)
   const handleDownloadJsonBackup = async () => {
     setIsDownloadingJson(true);
+    setBackupStatusText('Menyematkan seluruh foto profil, galeri, dan media...');
     try {
       let contentToBackup = siteContent;
       let logoToBackup = logoConfig;
@@ -626,103 +733,122 @@ export const BackupManager: React.FC<BackupManagerProps> = ({
         } catch (e) {}
       }
 
+      // Automatically embed all images as Base64 Data URLs so the JSON backup is 100% self-contained on Android
+      const {
+        siteContent: embeddedContent,
+        logoConfig: embeddedLogo,
+        stickyFooterConfig: embeddedFooter,
+        inlinedMediaCount
+      } = await embedMediaInSiteData(contentToBackup, logoToBackup, footerToBackup, (msg) => setBackupStatusText(msg));
+
       const backupObj = {
         version: '2.0',
         app: 'Web-Personal-Ust-Jaenal-Maskun',
         exportedAt: new Date().toISOString(),
         timestamp: Date.now(),
         data: {
-          siteContent: contentToBackup,
-          logoConfig: logoToBackup,
-          stickyFooterConfig: footerToBackup,
+          siteContent: embeddedContent,
+          logoConfig: embeddedLogo,
+          stickyFooterConfig: embeddedFooter,
           lastUpdated: Date.now()
+        },
+        meta: {
+          embeddedMediaCount: inlinedMediaCount,
+          compatibleWithAndroid: true
         }
       };
 
       const blob = new Blob([JSON.stringify(backupObj, null, 2)], { type: 'application/json' });
       const dateStr = new Date().toISOString().slice(0, 10);
       downloadBlobSafely(blob, `backup-master-web-jaenalmaskun-${dateStr}.json`);
+      setRestoreSuccessMsg(`Cadangan JSON berhasil diunduh (${inlinedMediaCount} foto tersimpan mandiri)!`);
     } catch (e: any) {
       alert('Gagal mengunduh cadangan JSON: ' + (e?.message || 'Kesalahan browser'));
     } finally {
       setIsDownloadingJson(false);
+      setBackupStatusText(null);
     }
   };
 
-  // Handler: Download Full ZIP Backup (Instant & Fail-safe)
+  // Handler: Download Full ZIP Backup (Instant, Self-Contained with Embedded Photos & Uploads Folder)
   const handleDownloadZipBackup = async () => {
     setIsDownloadingZip(true);
+    setBackupStatusText('Menyiapkan paket ZIP lengkap beserta berkas media...');
     try {
-      let zipBlob: Blob | null = null;
+      let contentToBackup = siteContent;
+      let logoToBackup = logoConfig;
+      let footerToBackup = stickyFooterConfig;
 
-      // 1. Attempt quick server fetch with 2.5 second timeout
-      try {
-        const controller = new AbortController();
-        const timer = setTimeout(() => controller.abort(), 2500);
-        const res = await fetch('/api/backup/zip-data', { signal: controller.signal });
-        clearTimeout(timer);
-        if (res.ok) {
-          const contentType = res.headers.get('content-type') || '';
-          if (contentType.includes('zip') || contentType.includes('octet-stream')) {
-            zipBlob = await res.blob();
-          }
-        }
-      } catch (e) {}
-
-      // 2. Client-side fallback with JSZip if server endpoint is not available or timed out
-      if (!zipBlob) {
-        const zip = new JSZip();
-        let contentToBackup = siteContent;
-        let logoToBackup = logoConfig;
-        let footerToBackup = stickyFooterConfig;
-
-        if (!contentToBackup) {
-          try {
-            const raw = localStorage.getItem('madrasah_site_content_config');
-            if (raw) contentToBackup = JSON.parse(raw);
-          } catch (e) {}
-        }
-        if (!logoToBackup) {
-          try {
-            const raw = localStorage.getItem('madrasah_custom_header_logo');
-            if (raw) logoToBackup = JSON.parse(raw);
-          } catch (e) {}
-        }
-        if (!footerToBackup) {
-          try {
-            const raw = localStorage.getItem('madrasah_sticky_footer_config');
-            if (raw) footerToBackup = JSON.parse(raw);
-          } catch (e) {}
-        }
-
-        const backupBundle = {
-          version: '2.0',
-          app: 'Web-Personal-Ust-Jaenal-Maskun',
-          exportedAt: new Date().toISOString(),
-          timestamp: Date.now(),
-          data: {
-            siteContent: contentToBackup,
-            logoConfig: logoToBackup,
-            stickyFooterConfig: footerToBackup,
-            lastUpdated: Date.now()
-          }
-        };
-
-        zip.file('backup.json', JSON.stringify(backupBundle, null, 2));
-        zip.file('data/persisted_site_data.json', JSON.stringify({ siteContent: contentToBackup, logoConfig: logoToBackup, stickyFooterConfig: footerToBackup }, null, 2));
-        zip.file('data/site_content.json', JSON.stringify(contentToBackup, null, 2));
-        zip.file('database.sql', generateDatabaseSql(contentToBackup, logoToBackup, footerToBackup));
-        zip.file('README_CADANGAN.txt', `PAKET CADANGAN LENGKAP WEB UST. JAENAL MASKUN\nTanggal Ekspor: ${new Date().toLocaleString('id-ID')}\nFormat: JSON + MySQL Database Dump`);
-
-        zipBlob = await zip.generateAsync({ type: 'blob', compression: 'DEFLATE' });
+      if (!contentToBackup) {
+        try {
+          const raw = localStorage.getItem('madrasah_site_content_config');
+          if (raw) contentToBackup = JSON.parse(raw);
+        } catch (e) {}
+      }
+      if (!logoToBackup) {
+        try {
+          const raw = localStorage.getItem('madrasah_custom_header_logo');
+          if (raw) logoToBackup = JSON.parse(raw);
+        } catch (e) {}
+      }
+      if (!footerToBackup) {
+        try {
+          const raw = localStorage.getItem('madrasah_sticky_footer_config');
+          if (raw) footerToBackup = JSON.parse(raw);
+        } catch (e) {}
       }
 
+      // Convert all photo URLs to Base64 so they are self-contained
+      const {
+        siteContent: embeddedContent,
+        logoConfig: embeddedLogo,
+        stickyFooterConfig: embeddedFooter,
+        inlinedMediaCount
+      } = await embedMediaInSiteData(contentToBackup, logoToBackup, footerToBackup, (msg) => setBackupStatusText(msg));
+
+      const zip = new JSZip();
+      const backupBundle = {
+        version: '2.0',
+        app: 'Web-Personal-Ust-Jaenal-Maskun',
+        exportedAt: new Date().toISOString(),
+        timestamp: Date.now(),
+        data: {
+          siteContent: embeddedContent,
+          logoConfig: embeddedLogo,
+          stickyFooterConfig: embeddedFooter,
+          lastUpdated: Date.now()
+        },
+        meta: {
+          embeddedMediaCount: inlinedMediaCount,
+          compatibleWithAndroid: true
+        }
+      };
+
+      zip.file('backup.json', JSON.stringify(backupBundle, null, 2));
+      zip.file('data/persisted_site_data.json', JSON.stringify({ siteContent: embeddedContent, logoConfig: embeddedLogo, stickyFooterConfig: embeddedFooter }, null, 2));
+      zip.file('data/site_content.json', JSON.stringify(embeddedContent, null, 2));
+      zip.file('database.sql', generateDatabaseSql(embeddedContent, embeddedLogo, embeddedFooter));
+
+      // Pack ALL physical image & media files into uploads/ folder inside ZIP
+      const uploadsFolder = zip.folder('uploads');
+      if (uploadsFolder) {
+        const mediaAssets = collectAllMediaAssetsForZip(embeddedContent, embeddedLogo, embeddedFooter);
+        for (const asset of mediaAssets) {
+          uploadsFolder.file(asset.filename, asset.data);
+        }
+      }
+
+      zip.file('README_CADANGAN.txt', `PAKET CADANGAN LENGKAP WEB UST. JAENAL MASKUN\nTanggal Ekspor: ${new Date().toLocaleString('id-ID')}\nTotal Foto/Media Disematkan: ${inlinedMediaCount}\nKompatibilitas: Android, iPhone, Windows, Mac & Hosting cPanel/Plesk.`);
+
+      const zipBlob = await zip.generateAsync({ type: 'blob', compression: 'DEFLATE' });
       const dateStr = new Date().toISOString().slice(0, 10);
       downloadBlobSafely(zipBlob, `paket-cadangan-lengkap-jaenalmaskun-${dateStr}.zip`);
+      setRestoreSuccessMsg(`Paket ZIP berhasil diunduh (${inlinedMediaCount} foto tersemat mandiri)!`);
     } catch (e: any) {
-      alert('Gagal membuat berkas ZIP: ' + (e?.message || 'Kesalahan browser'));
+      alert('Gagal membuat berkas ZIP: ' + (e?.message || 'Kesalahan'));
     } finally {
       setIsDownloadingZip(false);
+      setBackupStatusText(null);
     }
   };
 
@@ -996,14 +1122,19 @@ export const BackupManager: React.FC<BackupManagerProps> = ({
                   <Download className="w-6 h-6" />
                 </div>
                 <div>
-                  <h4 className="text-sm font-bold text-gray-900">1. Cadangan Berkas JSON (Ringkas)</h4>
+                  <div className="flex items-center gap-1.5 mb-1">
+                    <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-emerald-100 text-emerald-900">
+                      Foto Tersemat (Android Ready)
+                    </span>
+                  </div>
+                  <h4 className="text-sm font-bold text-gray-900">1. Cadangan Berkas JSON (Mandiri & Foto)</h4>
                   <p className="text-xs text-gray-600 mt-1 leading-relaxed">
-                    Menyimpan seluruh konfigurasi profil, karya, agenda, pilar, galeri, pesan, logo, dan footer dalam 1 berkas format JSON terstruktur.
+                    Menyimpan seluruh konfigurasi profil, karya, agenda, pilar, galeri, logo, serta menyematkan foto profil secara mandiri sehingga foto tetap tampil sempurna saat dipulihkan di HP Android maupun PC.
                   </p>
                 </div>
                 <div className="p-3 bg-emerald-50 rounded-xl border border-emerald-200 text-[11px] text-emerald-900 space-y-1">
                   <span className="font-bold block">✓ Keunggulan:</span>
-                  <p>Ukuran sangat kecil (~50 KB), proses unduh instan, dan mudah dipulihkan kembali ke website.</p>
+                  <p>Ukuran efisien, foto profil & galeri otomatis disematkan, dan mudah dipulihkan langsung dari HP.</p>
                 </div>
               </div>
 
@@ -1025,14 +1156,19 @@ export const BackupManager: React.FC<BackupManagerProps> = ({
                   <Archive className="w-6 h-6" />
                 </div>
                 <div>
-                  <h4 className="text-sm font-bold text-gray-900">2. Paket Cadangan Komplit (ZIP)</h4>
+                  <div className="flex items-center gap-1.5 mb-1">
+                    <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-amber-100 text-amber-900">
+                      Paket Arsip Komplit
+                    </span>
+                  </div>
+                  <h4 className="text-sm font-bold text-gray-900">2. Paket Cadangan Komplit (ZIP + Media)</h4>
                   <p className="text-xs text-gray-600 mt-1 leading-relaxed">
-                    Paket lengkap yang mencakup seluruh file data JSON, berkas unggahan PDF modul & foto, dan panduan pemulihan mandiri.
+                    Paket terlengkap berisi file database JSON (dengan foto tersemat), folder fisik gambar/media (<code className="font-mono text-emerald-800">uploads/</code>), dan skrip SQL untuk migrasi database.
                   </p>
                 </div>
                 <div className="p-3 bg-amber-50 rounded-xl border border-amber-200 text-[11px] text-amber-950 space-y-1">
                   <span className="font-bold block">✓ Keunggulan:</span>
-                  <p>Arsip terlengkap untuk backup jangka panjang di Google Drive, harddisk lokal, atau migrasi server.</p>
+                  <p>Menyertakan salinan fisik foto dan gambar sehingga dapat diekstrak atau dipulihkan di segala perangkat.</p>
                 </div>
               </div>
 
@@ -1130,12 +1266,20 @@ export const BackupManager: React.FC<BackupManagerProps> = ({
               </p>
             </div>
 
+            {/* Backup Processing Status Alert */}
+            {backupStatusText && (
+              <div className="p-4 rounded-2xl bg-amber-50 border-2 border-amber-300 text-xs text-amber-950 flex items-center gap-3 font-bold animate-pulse">
+                <RefreshCw className="w-5 h-5 text-amber-600 animate-spin shrink-0" />
+                <span>{backupStatusText}</span>
+              </div>
+            )}
+
             {/* Step 1: Upload / Dropzone Box */}
             <div
               onDragOver={handleDragOver}
               onDragLeave={handleDragLeave}
               onDrop={handleDrop}
-              className={`p-8 rounded-2xl border-2 border-dashed transition-all flex flex-col items-center justify-center text-center space-y-3 cursor-pointer ${
+              className={`p-6 sm:p-8 rounded-2xl border-2 border-dashed transition-all flex flex-col items-center justify-center text-center space-y-4 cursor-pointer ${
                 isDraggingOver
                   ? 'border-amber-500 bg-amber-50 scale-[1.01]'
                   : 'border-emerald-300 bg-emerald-50/50 hover:bg-emerald-50 hover:border-emerald-400'
@@ -1146,27 +1290,38 @@ export const BackupManager: React.FC<BackupManagerProps> = ({
               }`}>
                 <Upload className="w-7 h-7" />
               </div>
-              <div>
-                <label className="text-sm font-bold text-emerald-950 block cursor-pointer hover:underline">
-                  Klik untuk Memilih Berkas atau Seret ke Sini (.ZIP / .JSON / .SQL)
-                  <input
-                    type="file"
-                    accept=".json,.zip,.sql,application/json,application/zip,application/x-zip-compressed,text/sql,application/sql,text/plain"
-                    onChange={handleFileChange}
-                    className="sr-only"
-                  />
-                </label>
-                <p className="text-xs text-gray-500 mt-1">
-                  Mendukung paket arsip <code className="font-mono font-bold text-emerald-800">.zip</code> lengkap, berkas konfigurasi <code className="font-mono font-bold text-emerald-800">.json</code>, serta skrip dump <code className="font-mono font-bold text-emerald-800">.sql</code>
+
+              <div className="space-y-2.5 max-w-lg">
+                <button
+                  type="button"
+                  onClick={() => document.getElementById('backup-restore-file-input')?.click()}
+                  className="px-6 py-3 rounded-2xl bg-gradient-to-r from-emerald-800 to-emerald-950 hover:from-emerald-700 hover:to-emerald-900 text-white font-extrabold text-xs flex items-center justify-center gap-2 shadow-md active:scale-95 transition-all cursor-pointer mx-auto"
+                >
+                  <FolderUp className="w-4 h-4 text-amber-300" />
+                  <span>Pilih Berkas Cadangan (HP Android / Komputer)</span>
+                </button>
+                <input
+                  id="backup-restore-file-input"
+                  type="file"
+                  accept="*/*"
+                  onChange={handleFileChange}
+                  className="sr-only"
+                />
+                <p className="text-xs text-gray-500">
+                  Mendukung paket arsip <code className="font-mono font-bold text-emerald-800">.zip</code> komplit beserta foto, berkas konfigurasi <code className="font-mono font-bold text-emerald-800">.json</code>, serta skrip dump <code className="font-mono font-bold text-emerald-800">.sql</code>
                 </p>
+                <div className="inline-flex items-center gap-2 px-3.5 py-1.5 rounded-full bg-emerald-100/90 text-emerald-950 text-[11px] font-semibold border border-emerald-200">
+                  <Smartphone className="w-3.5 h-3.5 text-emerald-700 shrink-0" />
+                  <span>📱 <strong>Pengguna HP Android:</strong> Berkas hasil unduh biasanya berada di folder <strong>Download / Unduhan</strong> pada aplikasi File Manager Anda.</span>
+                </div>
               </div>
 
               {selectedFile && (
-                <div className="inline-flex items-center gap-2 px-3.5 py-1.5 rounded-full bg-white border border-emerald-300 text-xs font-semibold text-emerald-900 shadow-2xs">
+                <div className="inline-flex items-center gap-2 px-4 py-2 rounded-full bg-white border border-emerald-300 text-xs font-semibold text-emerald-900 shadow-sm">
                   <FileCheck className="w-4 h-4 text-emerald-600 shrink-0" />
                   <span>{selectedFile.name} ({(selectedFile.size / 1024).toFixed(1)} KB)</span>
                   {restoreStats?.fileTypeDesc && (
-                    <span className="text-[10px] px-2 py-0.5 rounded-full bg-emerald-100 text-emerald-800 font-bold">
+                    <span className="text-[10px] px-2.5 py-0.5 rounded-full bg-emerald-100 text-emerald-800 font-bold border border-emerald-200">
                       {restoreStats.fileTypeDesc}
                     </span>
                   )}
@@ -1200,8 +1355,9 @@ export const BackupManager: React.FC<BackupManagerProps> = ({
                   </h5>
                   <div className="flex items-center gap-2">
                     {restoreStats.mediaCount !== undefined && restoreStats.mediaCount > 0 && (
-                      <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-amber-100 text-amber-900 border border-amber-300">
-                        {restoreStats.mediaCount} Berkas Media/Gambar
+                      <span className="text-[10px] font-bold px-2.5 py-0.5 rounded-full bg-amber-100 text-amber-900 border border-amber-300 flex items-center gap-1">
+                        <ImageIcon className="w-3 h-3 text-amber-700" />
+                        {restoreStats.mediaCount} Berkas Media/Foto
                       </span>
                     )}
                     <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-emerald-100 text-emerald-800 border border-emerald-200">
@@ -1209,6 +1365,26 @@ export const BackupManager: React.FC<BackupManagerProps> = ({
                     </span>
                   </div>
                 </div>
+
+                {/* Avatar Preview if available */}
+                {previewAvatar && (
+                  <div className="flex items-center gap-3.5 p-3.5 bg-emerald-50 rounded-2xl border border-emerald-300 shadow-2xs">
+                    <img
+                      src={previewAvatar}
+                      alt="Pratinjau Foto Profil"
+                      className="w-12 h-14 rounded-xl object-cover border-2 border-emerald-600 shadow-xs shrink-0"
+                    />
+                    <div>
+                      <span className="text-xs font-bold text-emerald-950 flex items-center gap-1.5">
+                        <Camera className="w-3.5 h-3.5 text-emerald-700" />
+                        Foto Profil & Media Tersemat (Siap Tampil di Android)
+                      </span>
+                      <span className="text-[11px] text-emerald-800 leading-relaxed block mt-0.5">
+                        Foto tersimpan langsung di dalam berkas cadangan ini dan akan otomatis tampil di Android maupun komputer setelah pemulihan disetujui.
+                      </span>
+                    </div>
+                  </div>
+                )}
 
                 <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 text-xs">
                   <div className="p-3 bg-white rounded-xl border border-gray-200 shadow-2xs">

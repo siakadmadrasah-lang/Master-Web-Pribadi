@@ -4139,21 +4139,31 @@ app.get('/api/backup/zip-data', async (req, res) => {
     // 2. MySQL Dump SQL
     zip.file('database.sql', generateSqlContent(currentData));
 
-    // 3. Uploads directory (flyers, avatar, custom images, pdfs)
-    const uploadsDir = fs.existsSync(UPLOADS_PUBLIC_DIR)
-      ? UPLOADS_PUBLIC_DIR
-      : fs.existsSync(UPLOADS_DATA_DIR)
-      ? UPLOADS_DATA_DIR
-      : null;
+    // 3. Uploads & Media directory (flyers, avatar, custom images, pdfs, logos)
+    const uploadsFolder = zip.folder('uploads');
+    const scannedDirs = [UPLOADS_PUBLIC_DIR, UPLOADS_DATA_DIR, path.join(process.cwd(), 'public')];
+    const addedFiles = new Set<string>();
 
-    if (uploadsDir && fs.existsSync(uploadsDir)) {
-      const uploadsFolder = zip.folder('uploads');
-      const uploadFiles = fs.readdirSync(uploadsDir);
-      for (const file of uploadFiles) {
-        const filePath = path.join(uploadsDir, file);
-        if (fs.statSync(filePath).isFile()) {
-          const fileContent = fs.readFileSync(filePath);
-          uploadsFolder?.file(file, fileContent);
+    for (const uDir of scannedDirs) {
+      if (uDir && fs.existsSync(uDir)) {
+        try {
+          const files = fs.readdirSync(uDir);
+          for (const file of files) {
+            const filePath = path.join(uDir, file);
+            if (fs.statSync(filePath).isFile()) {
+              // For public root directory, only include media and document assets
+              if (uDir === path.join(process.cwd(), 'public') && !file.match(/\.(jpg|jpeg|png|webp|svg|gif|ico|pdf)$/i)) {
+                continue;
+              }
+              if (!addedFiles.has(file)) {
+                addedFiles.add(file);
+                const fileContent = fs.readFileSync(filePath);
+                uploadsFolder?.file(file, fileContent);
+              }
+            }
+          }
+        } catch (e) {
+          console.warn('Scan media dir warning:', uDir, e);
         }
       }
     }
