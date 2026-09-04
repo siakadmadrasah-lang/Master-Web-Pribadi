@@ -89,6 +89,7 @@ import {
 } from '../utils/sqlGenerator';
 import { SiteContentEditor } from './SiteContentEditor';
 import { BackupManager } from './BackupManager';
+import { ErrorBoundary } from './ErrorBoundary';
 import { downloadPleskPackageZip, triggerZipDownload, PLESK_DB_CONFIG } from '../utils/pleskExporter';
 import { downloadCpanelPackageZip, CPANEL_DB_CONFIG } from '../utils/cpanelExporter';
 
@@ -5562,12 +5563,15 @@ export const AdminPortal: React.FC<AdminPortalProps> = ({
               {/* TAB: CADANGAN DATA & PEMULIHAN (BACKUP & RESTORE) */}
               {/* ============================================================ */}
               {activeTab === 'backup' && (
-                <BackupManager
-                  onDataRestored={onSaveSiteContent}
-                  siteContent={siteContent}
-                  logoConfig={logoConfig}
-                  stickyFooterConfig={stickyFooterConfig}
-                />
+                <ErrorBoundary tabName="Cadangan Data & Pemulihan (Backup & Restore)">
+                  <BackupManager
+                    onDataRestored={onSaveSiteContent}
+                    siteContent={siteContent}
+                    logoConfig={logoConfig}
+                    stickyFooterConfig={stickyFooterConfig}
+                    onOpenCpanelTab={() => setActiveTab('cpanel')}
+                  />
+                </ErrorBoundary>
               )}
 
               {/* ============================================================ */}

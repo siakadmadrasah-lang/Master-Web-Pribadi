@@ -108,6 +108,7 @@ export interface HeaderLogoConfig {
   backgroundColor?: 'dark' | 'white' | 'transparent' | 'emerald';
   faviconUrl?: string;
   footerLogoUrl?: string;
+  footerCustomImageUrl?: string;
   footerLogoType?: 'sync_header' | 'custom' | 'monogram';
   footerLogoMode?: 'match_header' | 'custom';
   blendMode?: 'normal' | 'multiply' | 'screen' | 'darken' | 'transparent_blend';

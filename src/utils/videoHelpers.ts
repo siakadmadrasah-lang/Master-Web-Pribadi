@@ -10,9 +10,12 @@ export type VideoPlatform =
   | 'instagram'
   | 'facebook'
   | 'google_drive'
+  | 'drive'
   | 'vimeo'
   | 'direct_video'
+  | 'mp4'
   | 'direct_audio'
+  | 'other'
   | 'unknown';
 
 export interface ParsedVideo {

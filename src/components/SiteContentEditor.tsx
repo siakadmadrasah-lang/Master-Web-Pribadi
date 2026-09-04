@@ -2655,7 +2655,7 @@ export const SiteContentEditor: React.FC<SiteContentEditorProps> = ({
                 <button
                   type="button"
                   disabled={isSyncingYoutube}
-                  onClick={handleSyncYoutube}
+                  onClick={() => handleSyncYoutube()}
                   className="px-4 py-2.5 rounded-xl bg-red-600 hover:bg-red-700 disabled:bg-slate-700 text-white text-xs font-bold flex items-center gap-2 shadow-lg hover:shadow-red-600/30 transition-all cursor-pointer disabled:cursor-not-allowed active:scale-95"
                 >
                   <RefreshCw className={`w-4 h-4 ${isSyncingYoutube ? 'animate-spin' : ''}`} />

@@ -29,7 +29,7 @@ import {
 } from 'lucide-react';
 import { defaultYouTubeVideos, defaultYouTubeChannelConfig, defaultMediaChannels } from '../data/personalData';
 import { YouTubeChannelVideo, YouTubeChannelConfig, ProfileInfo, MediaChannelAccount } from '../types';
-import { parseVideoUrl, getPlatformBadgeStyle, fetchYouTubeVideosUniversal, generateChannelPoster } from '../utils/videoHelpers';
+import { parseVideoUrl, getPlatformBadgeStyle, fetchYouTubeVideosUniversal, generateChannelPoster, VideoPlatform } from '../utils/videoHelpers';
 import { UniversalMediaPlayer } from './UniversalMediaPlayer';
 import { backgroundMedia } from '../utils/backgroundMediaManager';
 
@@ -959,7 +959,7 @@ export const MediaChannelSection: React.FC<MediaChannelSectionProps> = ({
       {/* ========================================================================= */}
       {activeVideo && (() => {
         const parsedActive = parseVideoUrl(activeVideo.videoUrl);
-        const activeBadge = getPlatformBadgeStyle(parsedActive?.type || activeVideo.platform || 'youtube');
+        const activeBadge = getPlatformBadgeStyle((parsedActive?.type || activeVideo.platform || 'youtube') as VideoPlatform);
 
         return (
           <div className="fixed inset-0 z-50 flex items-center justify-center p-3 sm:p-6 bg-black/90 backdrop-blur-md animate-fadeIn">
