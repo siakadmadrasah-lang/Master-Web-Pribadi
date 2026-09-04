@@ -508,7 +508,7 @@ export const BackupManager: React.FC<BackupManagerProps> = ({
     try {
       let resultData: any = null;
 
-      // 1. If it's a ZIP package, attempt multipart restore to server with short timeout
+      // 1. If it's a ZIP package, attempt multipart restore to server
       if (parsedRestoreData._fileType === 'zip' && selectedFile) {
         const formData = new FormData();
         formData.append('backupZip', selectedFile);
@@ -516,7 +516,7 @@ export const BackupManager: React.FC<BackupManagerProps> = ({
 
         try {
           const controller = new AbortController();
-          const timer = setTimeout(() => controller.abort(), 3500);
+          const timer = setTimeout(() => controller.abort(), 60000);
           const res = await fetch('/api/backup/restore-zip', {
             method: 'POST',
             body: formData,
@@ -537,7 +537,7 @@ export const BackupManager: React.FC<BackupManagerProps> = ({
         }
       }
 
-      // 2. Standard JSON restore fallback
+      // 2. Standard JSON restore
       if (!resultData) {
         const payloadToRestore = {
           ...parsedRestoreData,
@@ -550,7 +550,7 @@ export const BackupManager: React.FC<BackupManagerProps> = ({
 
         try {
           const controller = new AbortController();
-          const timer = setTimeout(() => controller.abort(), 3000);
+          const timer = setTimeout(() => controller.abort(), 60000);
           const res = await fetch('/api/backup/restore', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
@@ -559,23 +559,31 @@ export const BackupManager: React.FC<BackupManagerProps> = ({
           });
           clearTimeout(timer);
 
-          const text = await res.text();
-          try {
-            resultData = JSON.parse(text);
-          } catch (parseErr) {
-            resultData = {
-              success: true,
-              message: 'Data berhasil dipulihkan dan diselaraskan ke browser!',
-              restoredData: payloadToRestore.data || payloadToRestore
-            };
+          if (res.ok) {
+            const text = await res.text();
+            try {
+              resultData = JSON.parse(text);
+            } catch (parseErr) {
+              resultData = {
+                success: true,
+                message: 'Data berhasil dipulihkan dan diselaraskan ke browser!',
+                restoredData: payloadToRestore.data || payloadToRestore
+              };
+            }
           }
         } catch (netErr) {
-          resultData = {
-            success: true,
-            message: 'Data berhasil dipulihkan ke memori lokal browser!',
-            restoredData: payloadToRestore.data || payloadToRestore
-          };
+          console.warn('Network notice during restore:', netErr);
         }
+      }
+
+      if (!resultData) {
+        // Local fallback if offline
+        const payloadToRestore = parsedRestoreData.data || parsedRestoreData;
+        resultData = {
+          success: true,
+          message: 'Data berhasil dipulihkan ke memori lokal browser!',
+          restoredData: payloadToRestore
+        };
       }
 
       if (resultData && resultData.success) {
@@ -617,29 +625,27 @@ export const BackupManager: React.FC<BackupManagerProps> = ({
           localStorage.setItem('madrasah_sticky_footer_config', JSON.stringify(finalFooter));
           onSaveStickyFooterConfig(finalFooter);
         }
-        localStorage.setItem('madrasah_last_updated', String(Date.now()));
+        const restoreNowTs = Date.now();
+        localStorage.setItem('madrasah_last_updated', String(restoreNowTs));
 
-        // Also sync to MySQL in background without blocking
+        // Also sync to MySQL / server so database has the restored data
         try {
-          const syncCtrl = new AbortController();
-          const syncTimer = setTimeout(() => syncCtrl.abort(), 2000);
-          fetch('/api/sync-to-mysql', {
+          await fetch('/api/sync-to-mysql', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            signal: syncCtrl.signal,
             body: JSON.stringify({
               siteContent: finalContent,
               logoConfig: finalLogo,
               stickyFooterConfig: finalFooter,
-              lastUpdated: Date.now()
+              lastUpdated: restoreNowTs
             })
-          }).then(() => clearTimeout(syncTimer)).catch(() => {});
+          });
         } catch (syncErr) {}
 
         fetchSnapshots();
         setTimeout(() => {
           window.location.reload();
-        }, 1200);
+        }, 800);
       } else {
         setRestoreError(resultData?.error || 'Gagal menerapkan pemulihan data.');
       }

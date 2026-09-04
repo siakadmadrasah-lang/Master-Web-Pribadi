@@ -13,7 +13,7 @@
       "location": "Gentawangi, Indonesia",
       "email": "jaenalmaskun.ai@gmail.com",
       "phone": "+62 812-3456-7890",
-      "avatarUrl": "/uploads/avatar_1787051686042_07hu2t.jpg",
+      "avatarUrl": "",
       "socials": {
         "whatsapp": "https://wa.me/6281234567890",
         "youtube": "https://www.youtube.com/@jaenalmaskunofficial3977",
@@ -724,7 +724,7 @@
       "greetingSub": "Khidmat untuk Pendidikan Islam & Literasi Madrasah",
       "showStats": true,
       "showDownloadCV": true,
-      "heroImage": "/uploads/hero_1788506992540_nmuha6.jpg",
+      "heroImage": "",
       "photoBadgeText": "Pejuang MI"
     },
     "shareSettings": {
@@ -832,5 +832,5 @@
       }
     ]
   },
-  "lastUpdated": 1788507287864
+  "lastUpdated": 1788507022978
 }

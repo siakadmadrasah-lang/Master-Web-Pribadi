@@ -116,12 +116,12 @@ export default function App() {
       console.warn('Error reading saved site content from storage', e);
     }
 
-    // 1. Utamakan data yang diinjeksi langsung dari server (SSR / window.__INITIAL_SITE_DATA__)
-    if (initialWindowData?.siteContent) {
+    // Timestamp arbitration: gunakan yang paling baru antara localStorage vs window injection
+    const initialTs = initialWindowData?.lastUpdated || 0;
+    if (initialWindowData?.siteContent && (!localSaved || initialTs >= localTs)) {
       return mergeSiteContent(initialWindowData.siteContent);
     }
 
-    // 2. Jika tidak ada injeksi window, gunakan localStorage jika ada
     if (localSaved) {
       return localSaved;
     }
@@ -319,6 +319,30 @@ export default function App() {
 
       if (res.ok && res.data) {
         const json = res.data;
+
+        // Anti-Clobber Safeguard:
+        // Jika data di browser lokal memiliki timestamp lebih baru dibanding server (misal baru saja pulihkan backup),
+        // jangan biarkan server menimpa kembali browser!
+        // Sebaliknya, dorong data lokal terbaru ini ke server/MySQL agar server sinkron!
+        const localTsStr = localStorage.getItem('madrasah_last_updated');
+        const localTs = localTsStr ? parseInt(localTsStr, 10) : 0;
+        const serverTs = json.lastUpdated || 0;
+
+        if (localTs > serverTs + 1000 && siteContentRef.current) {
+          safeFetchJson('/api/sync-to-mysql', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              siteContent: siteContentRef.current,
+              logoConfig: logoConfigRef.current,
+              stickyFooterConfig: stickyFooterConfigRef.current,
+              lastUpdated: localTs
+            })
+          }).catch(() => {});
+          setSyncStatus('synced');
+          return;
+        }
+
         if (json.success && json.data) {
           const { siteContent: sContent, logoConfig: lConfig, stickyFooterConfig: fConfig } = json.data;
           

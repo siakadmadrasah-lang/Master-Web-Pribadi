@@ -3832,7 +3832,7 @@ app.post('/api/backup/restore', async (req, res) => {
 });
 
 // 2b. Restore from Full ZIP Archive (.ZIP containing data & uploads)
-app.post('/api/backup/restore-zip', backupZipMulter.single('backupZip'), async (req, res) => {
+app.post('/api/backup/restore-zip', (backupZipMulter.single('backupZip') as any), async (req: any, res: any) => {
   try {
     const file = req.file;
     if (!file || !file.buffer) {
@@ -4264,9 +4264,11 @@ CREATE TABLE IF NOT EXISTS \`site_settings\` (
   PRIMARY KEY (\`id\`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
-INSERT INTO \`site_settings\` (\`setting_key\`, \`setting_value\`)
-VALUES ('site_data', '${jsonEscaped}')
-ON DUPLICATE KEY UPDATE \`setting_value\` = VALUES(\`setting_value\`);
+-- PERLINDUNGAN ANTI DATA-LOSS:
+-- Gunakan INSERT IGNORE agar jika tabel site_settings sudah memiliki data kustom Anda,
+-- data live tersebut TIDAK AKAN PERNAH tertimpa kembali ke default!
+INSERT IGNORE INTO \`site_settings\` (\`setting_key\`, \`setting_value\`)
+VALUES ('site_data', '${jsonEscaped}');
 
 -- --------------------------------------------------------
 -- 2. TABEL PESAN SILATURAHMI / KONTAK
@@ -4662,7 +4664,10 @@ if (!$siteData && file_exists($dataFileDefault)) {
     $json = @file_get_contents($dataFileDefault);
     if ($json) {
         $siteData = @json_decode($json, true);
-        @file_put_contents($dataFile1, $json);
+        // Anti Data-Loss: HANYA salin ke persisted jika file persisted belum ada sama sekali atau kosong!
+        if (!file_exists($dataFile1) || filesize($dataFile1) < 20) {
+            @file_put_contents($dataFile1, $json);
+        }
     }
 }
 
@@ -4766,10 +4771,17 @@ if ($_SERVER['REQUEST_METHOD'] === 'GET') {
     }
     
     if (!$data) {
-        if (file_exists($dataFile1)) {
+        if (file_exists($dataFile1) && filesize($dataFile1) > 20) {
             $data = @json_decode(@file_get_contents($dataFile1), true);
-        } elseif (file_exists($dataFile2)) {
+        } elseif (file_exists($dataFile2) && filesize($dataFile2) > 20) {
             $data = @json_decode(@file_get_contents($dataFile2), true);
+        }
+        $dataFileDefault = __DIR__ . '/../data/site_data.default.json';
+        if (!$data && file_exists($dataFileDefault)) {
+            $data = @json_decode(@file_get_contents($dataFileDefault), true);
+            if ($data && (!file_exists($dataFile1) || filesize($dataFile1) < 20)) {
+                @file_put_contents($dataFile1, json_encode($data, JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES));
+            }
         }
         if ($data && !empty($data['lastUpdated'])) {
             $lastUpdated = (int)$data['lastUpdated'];
@@ -5642,8 +5654,12 @@ if ($pdo) {
     } catch (Throwable $e) {}
 }
 if (empty($currentData)) {
-    if (file_exists($dataFile1)) $currentData = @json_decode(@file_get_contents($dataFile1), true) ?: [];
-    elseif (file_exists($dataFile2)) $currentData = @json_decode(@file_get_contents($dataFile2), true) ?: [];
+    if (file_exists($dataFile1) && filesize($dataFile1) > 20) $currentData = @json_decode(@file_get_contents($dataFile1), true) ?: [];
+    elseif (file_exists($dataFile2) && filesize($dataFile2) > 20) $currentData = @json_decode(@file_get_contents($dataFile2), true) ?: [];
+    $dataFileDefault = __DIR__ . '/../data/site_data.default.json';
+    if (empty($currentData) && file_exists($dataFileDefault)) {
+        $currentData = @json_decode(@file_get_contents($dataFileDefault), true) ?: [];
+    }
 }
 
 if ($_SERVER['REQUEST_METHOD'] === 'GET') {
@@ -5731,8 +5747,12 @@ if ($pdo) {
     } catch (Throwable $e) {}
 }
 if (empty($currentData)) {
-    if (file_exists($dataFile1)) $currentData = @json_decode(@file_get_contents($dataFile1), true) ?: [];
-    elseif (file_exists($dataFile2)) $currentData = @json_decode(@file_get_contents($dataFile2), true) ?: [];
+    if (file_exists($dataFile1) && filesize($dataFile1) > 20) $currentData = @json_decode(@file_get_contents($dataFile1), true) ?: [];
+    elseif (file_exists($dataFile2) && filesize($dataFile2) > 20) $currentData = @json_decode(@file_get_contents($dataFile2), true) ?: [];
+    $dataFileDefault = __DIR__ . '/../data/site_data.default.json';
+    if (empty($currentData) && file_exists($dataFileDefault)) {
+        $currentData = @json_decode(@file_get_contents($dataFileDefault), true) ?: [];
+    }
 }
 
 if ($_SERVER['REQUEST_METHOD'] === 'POST') {
@@ -5812,8 +5832,12 @@ if ($pdo) {
     } catch (Throwable $e) {}
 }
 if (empty($currentData)) {
-    if (file_exists($dataFile1)) $currentData = @json_decode(@file_get_contents($dataFile1), true) ?: [];
-    elseif (file_exists($dataFile2)) $currentData = @json_decode(@file_get_contents($dataFile2), true) ?: [];
+    if (file_exists($dataFile1) && filesize($dataFile1) > 20) $currentData = @json_decode(@file_get_contents($dataFile1), true) ?: [];
+    elseif (file_exists($dataFile2) && filesize($dataFile2) > 20) $currentData = @json_decode(@file_get_contents($dataFile2), true) ?: [];
+    $dataFileDefault = __DIR__ . '/../data/site_data.default.json';
+    if (empty($currentData) && file_exists($dataFileDefault)) {
+        $currentData = @json_decode(@file_get_contents($dataFileDefault), true) ?: [];
+    }
 }
 
 if ($_SERVER['REQUEST_METHOD'] === 'POST') {
@@ -6270,14 +6294,17 @@ app.get('/api/export-cpanel-zip', async (req, res) => {
     }
 
     // 3. Folder data/
+    // PERLINDUNGAN UTAMA: Jangan masukkan 'persisted_site_data.json' atau 'mysql_config.json' ke dalam ZIP!
+    // Dengan begitu, jika pengguna mengekstrak ZIP di cPanel/Plesk, data live dan koneksi database TIDAK AKAN PERNAH tertimpa!
     const dataFolder = zip.folder('data');
     if (dataFolder) {
       const fullJson = JSON.stringify(currentData, null, 2);
       dataFolder.file('site_data.default.json', fullJson);
-      dataFolder.file('persisted_site_data.json', fullJson);
       dataFolder.file('mysql_config.default.json', JSON.stringify(currentMySQLConfig, null, 2));
-      dataFolder.file('PERLINDUNGAN_DATA_CPANEL.txt', `SISTEM ANTI DATA-LOSS CPANEL AKTIF:
-Ekstrak isi berkas ZIP ini langsung ke folder public_html pada cPanel Anda.`);
+      dataFolder.file('PERLINDUNGAN_DATA_CPANEL.txt', `SISTEM ANTI DATA-LOSS AKTIF:
+- Berkas ZIP ini HANYA membawa template 'site_data.default.json'.
+- Berkas data live ('persisted_site_data.json') dan konfigurasi database Anda ('db_config.local.php' & 'mysql_config.json') TIDAK AKAN PERNAH tertimpa saat Anda mengekstrak ZIP ini di hosting.
+- Seluruh isi artikel, agenda, buku, kontak, dan foto yang sudah tersimpan di hosting akan tetap AMAN 100%.`);
     }
 
     // 4. Uploads directory

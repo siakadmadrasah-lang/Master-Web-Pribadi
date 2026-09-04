@@ -292,8 +292,10 @@ if (!$siteData && file_exists($dataFileDefault)) {
     $json = @file_get_contents($dataFileDefault);
     if ($json) {
         $siteData = @json_decode($json, true);
-        // Salin ke file persisted agar siap dimodifikasi
-        @file_put_contents($dataFile1, $json);
+        // Anti Data-Loss: HANYA salin ke file persisted jika belum ada sama sekali atau kosong
+        if (!file_exists($dataFile1) || filesize($dataFile1) < 20) {
+            @file_put_contents($dataFile1, $json);
+        }
     }
 }
 
@@ -400,10 +402,17 @@ if ($_SERVER['REQUEST_METHOD'] === 'GET') {
     }
     
     if (!$data) {
-        if (file_exists($dataFile1)) {
+        if (file_exists($dataFile1) && filesize($dataFile1) > 20) {
             $data = @json_decode(@file_get_contents($dataFile1), true);
-        } elseif (file_exists($dataFile2)) {
+        } elseif (file_exists($dataFile2) && filesize($dataFile2) > 20) {
             $data = @json_decode(@file_get_contents($dataFile2), true);
+        }
+        $dataFileDefault = __DIR__ . '/../data/site_data.default.json';
+        if (!$data && file_exists($dataFileDefault)) {
+            $data = @json_decode(@file_get_contents($dataFileDefault), true);
+            if ($data && (!file_exists($dataFile1) || filesize($dataFile1) < 20)) {
+                @file_put_contents($dataFile1, json_encode($data, JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES));
+            }
         }
         if ($data && !empty($data['lastUpdated'])) {
             $lastUpdated = (int)$data['lastUpdated'];
@@ -503,8 +512,12 @@ if ($pdo) {
     } catch (Throwable $e) {}
 }
 if (empty($currentData)) {
-    if (file_exists($dataFile1)) $currentData = @json_decode(@file_get_contents($dataFile1), true) ?: [];
-    elseif (file_exists($dataFile2)) $currentData = @json_decode(@file_get_contents($dataFile2), true) ?: [];
+    if (file_exists($dataFile1) && filesize($dataFile1) > 20) $currentData = @json_decode(@file_get_contents($dataFile1), true) ?: [];
+    elseif (file_exists($dataFile2) && filesize($dataFile2) > 20) $currentData = @json_decode(@file_get_contents($dataFile2), true) ?: [];
+    $dataFileDefault = __DIR__ . '/../data/site_data.default.json';
+    if (empty($currentData) && file_exists($dataFileDefault)) {
+        $currentData = @json_decode(@file_get_contents($dataFileDefault), true) ?: [];
+    }
 }
 
 if ($_SERVER['REQUEST_METHOD'] === 'GET') {
@@ -594,8 +607,12 @@ if ($pdo) {
     } catch (Throwable $e) {}
 }
 if (empty($currentData)) {
-    if (file_exists($dataFile1)) $currentData = @json_decode(@file_get_contents($dataFile1), true) ?: [];
-    elseif (file_exists($dataFile2)) $currentData = @json_decode(@file_get_contents($dataFile2), true) ?: [];
+    if (file_exists($dataFile1) && filesize($dataFile1) > 20) $currentData = @json_decode(@file_get_contents($dataFile1), true) ?: [];
+    elseif (file_exists($dataFile2) && filesize($dataFile2) > 20) $currentData = @json_decode(@file_get_contents($dataFile2), true) ?: [];
+    $dataFileDefault = __DIR__ . '/../data/site_data.default.json';
+    if (empty($currentData) && file_exists($dataFileDefault)) {
+        $currentData = @json_decode(@file_get_contents($dataFileDefault), true) ?: [];
+    }
 }
 
 if ($_SERVER['REQUEST_METHOD'] === 'POST') {
@@ -675,8 +692,12 @@ if ($pdo) {
     } catch (Throwable $e) {}
 }
 if (empty($currentData)) {
-    if (file_exists($dataFile1)) $currentData = @json_decode(@file_get_contents($dataFile1), true) ?: [];
-    elseif (file_exists($dataFile2)) $currentData = @json_decode(@file_get_contents($dataFile2), true) ?: [];
+    if (file_exists($dataFile1) && filesize($dataFile1) > 20) $currentData = @json_decode(@file_get_contents($dataFile1), true) ?: [];
+    elseif (file_exists($dataFile2) && filesize($dataFile2) > 20) $currentData = @json_decode(@file_get_contents($dataFile2), true) ?: [];
+    $dataFileDefault = __DIR__ . '/../data/site_data.default.json';
+    if (empty($currentData) && file_exists($dataFileDefault)) {
+        $currentData = @json_decode(@file_get_contents($dataFileDefault), true) ?: [];
+    }
 }
 
 if ($_SERVER['REQUEST_METHOD'] === 'POST') {
