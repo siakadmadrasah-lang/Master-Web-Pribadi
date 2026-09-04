@@ -1904,9 +1904,7 @@ if (class_exists('ZipArchive')) {
         $sql .= "REPLACE INTO \`site_settings\` (\`setting_key\`, \`setting_value\`) VALUES ('site_data', '" . $escapedData . "');\\n";
         $zip->addFromString('database.sql', $sql);
 
-        // 3. Uploads directory (otomatis optimasi: lewati video besar >15MB agar unduhan cepat & hemat kuota)
-        $includeVideos = isset($_GET['include_videos']) && ($_GET['include_videos'] === '1' || $_GET['include_videos'] === 'true');
-        $skippedLarge = [];
+        // 3. Uploads directory - Membackup 100% seluruh isi uploads tanpa ada yang tertinggal (logo, galeri foto, video, dokumen, dsb)
         $uploadsDir = __DIR__ . '/../uploads';
         if (is_dir($uploadsDir)) {
             $files = scandir($uploadsDir);
@@ -1914,36 +1912,26 @@ if (class_exists('ZipArchive')) {
                 if ($file === '.' || $file === '..') continue;
                 $filePath = $uploadsDir . '/' . $file;
                 if (is_file($filePath)) {
-                    $fSize = @filesize($filePath);
-                    $ext = strtolower(pathinfo($file, PATHINFO_EXTENSION));
-                    // Jika berkas adalah video atau arsip > 15MB dan tidak meminta include_videos, lewati agar zip tetap ringkas (~1-3MB)
-                    if (!$includeVideos && in_array($ext, ['mp4', 'mov', 'avi', 'mkv', 'webm', 'zip', 'tar', 'gz', 'iso']) && $fSize > (15 * 1024 * 1024)) {
-                        $skippedLarge[] = $file . ' (' . round($fSize / (1024 * 1024), 2) . ' MB)';
-                        continue;
-                    }
                     $zip->addFile($filePath, 'uploads/' . $file);
                 }
             }
         }
 
         // 4. README
-        $readme = "PAKET CADANGAN KOMPLIT WEB UST. JAENAL MASKUN, S.Pd.I.\\n";
-        $readme .= "Tanggal Ekspor: " . date('d-m-Y H:i:s') . "\\n";
-        $readme .= "Format: Multi-Format Komplit (.ZIP berisi data JSON, skrip MySQL .SQL, dan berkas foto/media uploads/)\\n";
-        $readme .= "Kompatibilitas: Android, iOS, Windows, Mac, Hosting Plesk, & cPanel.\\n";
-        if (!empty($skippedLarge)) {
-            $readme .= "\\nCATATAN FILE BESAR:\\n";
-            $readme .= "Berkas video berukuran besar berikut sengaja tidak dikemas ke dalam ZIP ini agar proses unduh cepat, hemat kuota HP, dan bebas crash:\\n";
-            foreach ($skippedLarge as $sk) {
-                $readme .= "- " . $sk . "\\n";
-            }
-            $readme .= "Berkas video di atas tetap tersimpan aman di direktori /uploads server Anda.\\n";
-        }
+        $readme = "PAKET CADANGAN KOMPLIT WEB UST. JAENAL MASKUN, S.Pd.I.\n";
+        $readme .= "Tanggal Ekspor: " . date('d-m-Y H:i:s') . "\n";
+        $readme .= "Format: Multi-Format Komplit 100% (.ZIP berisi data JSON, skrip MySQL .SQL, dan seluruh berkas foto/media/uploads)\n";
+        $readme .= "Kelengkapan: Database, Logo, Galeri Foto, Video Galeri, Dokumen PDF, & Pengaturan Sistem.\n";
+        $readme .= "Kompatibilitas: Android, iOS, Windows, Mac, Hosting Plesk, & cPanel.\n";
         $zip->addFromString('README_CADANGAN.txt', $readme);
 
         $zip->close();
 
         if (file_exists($tempZipPath)) {
+            // Bersihkan semua output buffer agar file besar (video/zip ratusan MB) dialirkan langsung tanpa memakan RAM server
+            while (ob_get_level()) {
+                @ob_end_clean();
+            }
             header('Access-Control-Allow-Origin: *');
             header('Content-Type: application/zip');
             header('Content-Disposition: attachment; filename="' . $zipFilename . '"');
@@ -1951,7 +1939,18 @@ if (class_exists('ZipArchive')) {
             header('Cache-Control: no-cache, no-store, must-revalidate');
             header('Pragma: no-cache');
             header('Expires: 0');
-            readfile($tempZipPath);
+
+            // Streaming potongan 1MB untuk keamanan memori & kestabilan di peramban HP Android
+            $fp = @fopen($tempZipPath, 'rb');
+            if ($fp) {
+                while (!feof($fp) && (connection_status() === 0)) {
+                    echo fread($fp, 1048576); // 1MB per chunk
+                    @flush();
+                }
+                fclose($fp);
+            } else {
+                readfile($tempZipPath);
+            }
             @unlink($tempZipPath);
             exit;
         }

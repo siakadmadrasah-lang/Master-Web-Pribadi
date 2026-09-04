@@ -996,8 +996,7 @@ export const BackupManager: React.FC<BackupManagerProps> = ({
     const backupFileName = `backup-data-komplit-jaenalmaskun-${dateStr}.zip`;
 
     // 1. Prioritas Utama: Unduh langsung via Server API (/api/backup/zip-data)
-    // Sangat cepat (<1 detik), ukuran sangat ringkas (~800 KB, bukan ratusan MB),
-    // 100% bebas dari crash "Yah! Terjadi masalah sewaktu menampilkan halaman web ini"
+    // Mengalirkan berkas langsung dari server, membackup 100% file tanpa ada yang tertinggal
     try {
       const directUrl = `/api/backup/zip-data?_t=${Date.now()}`;
       const link = document.createElement('a');
@@ -1006,7 +1005,7 @@ export const BackupManager: React.FC<BackupManagerProps> = ({
       document.body.appendChild(link);
       link.click();
       document.body.removeChild(link);
-      setRestoreSuccessMsg('Paket cadangan ZIP komplit berhasil diunduh (ringkas ~800 KB, lengkap dengan foto & database)!');
+      setRestoreSuccessMsg('Paket cadangan komplit 100% sedang diunduh! Seluruh file website, database, logo, galeri foto, video & dokumen tersimpan lengkap.');
       setIsDownloadingZip(false);
       setBackupStatusText(null);
       return;
@@ -1408,14 +1407,14 @@ export const BackupManager: React.FC<BackupManagerProps> = ({
                       Paket Arsip Komplit
                     </span>
                   </div>
-                  <h4 className="text-sm font-bold text-gray-900">2. Paket Cadangan Komplit (ZIP + Media)</h4>
+                  <h4 className="text-sm font-bold text-gray-900">2. Paket Cadangan Komplit (ZIP + Semua Media)</h4>
                   <p className="text-xs text-gray-600 mt-1 leading-relaxed">
-                    Paket terlengkap berisi file database JSON (dengan foto tersemat), folder fisik gambar/media (<code className="font-mono text-emerald-800">uploads/</code>), dan skrip SQL untuk migrasi database.
+                    Paket terlengkap berisi file database JSON, database MySQL (<code className="font-mono text-emerald-800">database.sql</code>), dan seluruh folder fisik media (<code className="font-mono text-emerald-800">uploads/</code>).
                   </p>
                 </div>
                 <div className="p-3 bg-amber-50 rounded-xl border border-amber-200 text-[11px] text-amber-950 space-y-1">
-                  <span className="font-bold block">✓ Keunggulan & Optimasi Ringkas:</span>
-                  <p>Menyertakan salinan fisik seluruh foto, logo, dokumen & database SQL (~1-2 MB). Video raksasa (&gt;15MB) otomatis dilewati agar unduhan instan, hemat kuota HP, dan anti-crash.</p>
+                  <span className="font-bold block">✓ Cadangan Normal 100% Utuh:</span>
+                  <p>Membackup seluruh isi website tanpa ada yang tertinggal: logo header/footer, seluruh foto &amp; video galeri, avatar, banner, dokumen kajian, serta skrip migrasi MySQL.</p>
                 </div>
               </div>
 
