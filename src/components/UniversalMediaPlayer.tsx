@@ -195,7 +195,8 @@ export const UniversalMediaPlayer: React.FC<UniversalMediaPlayerProps> = ({
           platform: parsed.platformName || (parsed.type === 'direct_video' ? 'Video Berkas' : 'Media Madrasah'),
         },
         parsed.type as any,
-        iframePlayerId.current
+        iframePlayerId.current,
+        Boolean(autoPlay)
       );
 
       if (parsed.type === 'youtube' && parsed.videoId) {
@@ -204,7 +205,9 @@ export const UniversalMediaPlayer: React.FC<UniversalMediaPlayerProps> = ({
         }, 150);
         const timer2 = setTimeout(() => {
           backgroundMedia.attachToYouTubeIframe(iframePlayerId.current);
-          backgroundMedia.play();
+          if (autoPlay) {
+            backgroundMedia.play();
+          }
         }, 600);
         return () => {
           clearTimeout(timer1);
@@ -218,7 +221,14 @@ export const UniversalMediaPlayer: React.FC<UniversalMediaPlayerProps> = ({
         backgroundMedia.attachMediaElement(directAudioRef.current);
       }
     }
-  }, [currentUrl, currentTitle, parsed?.type, parsed?.videoId, parsed?.isChannel]);
+  }, [currentUrl, currentTitle, parsed?.type, parsed?.videoId, parsed?.isChannel, autoPlay]);
+
+  // Clean up playback when player unmounts
+  useEffect(() => {
+    return () => {
+      backgroundMedia.pause();
+    };
+  }, []);
 
   // Direct video and audio element hookup
   useEffect(() => {

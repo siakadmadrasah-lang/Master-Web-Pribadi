@@ -114,7 +114,7 @@ export const MediaChannelSection: React.FC<MediaChannelSectionProps> = ({
     return () => window.removeEventListener('play-media-channel', handlePlayRequest);
   }, []);
 
-  // Update initial track for Kapsul Ajaib
+  // Register initial track metadata without autoplaying or opening capsule prematurely
   useEffect(() => {
     if (videos.length > 0) {
       const topVid = videos[0];
@@ -129,9 +129,10 @@ export const MediaChannelSection: React.FC<MediaChannelSectionProps> = ({
           videoUrl: topVid.videoUrl || (topVid.videoId ? `https://www.youtube.com/watch?v=${topVid.videoId}` : ''),
           platform: parsedVid?.platformName || 'YouTube',
         },
-        'youtube'
+        'youtube',
+        undefined,
+        false
       );
-      backgroundMedia.setCapsuleVisible(true);
     }
   }, [videos]);
 

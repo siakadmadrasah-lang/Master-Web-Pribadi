@@ -121,22 +121,14 @@ class BackgroundMediaManager {
   }
 
   private state: MediaPlaybackState = {
-    currentTrack: {
-      id: 'dQw4w9WgXcQ',
-      title: 'Kanal Media & Kajian Digital Madrasah',
-      artist: 'Ust. Jaenal Maskun, S.Pd.I.',
-      album: 'Kanal Resmi Media Digital',
-      artworkUrl: 'https://images.unsplash.com/photo-1584697964190-71c4c3b28b7e?auto=format&fit=crop&w=400&q=80',
-      videoUrl: 'https://www.youtube.com/@jaenalmaskunofficial3977',
-      platform: 'YouTube',
-    },
+    currentTrack: null,
     isPlaying: false,
     isMuted: false,
     volume: 100,
     currentTime: 0,
-    duration: 360,
+    duration: 0,
     isBackgroundPlayEnabled: true,
-    isCapsuleVisible: true,
+    isCapsuleVisible: false,
     isCapsuleExpanded: false,
     playerType: 'youtube',
   };
@@ -154,15 +146,6 @@ class BackgroundMediaManager {
       this.initMediaSession();
       this.initVisibilityListener();
       this.initPostMessageListener();
-
-      // Warmup on first interaction to unlock Android OS MediaSession & Audio Focus
-      const unlockAudio = () => {
-        this.warmupAudio();
-        window.removeEventListener('click', unlockAudio);
-        window.removeEventListener('touchstart', unlockAudio);
-      };
-      window.addEventListener('click', unlockAudio, { passive: true, once: true });
-      window.addEventListener('touchstart', unlockAudio, { passive: true, once: true });
     }
   }
 
@@ -234,6 +217,27 @@ class BackgroundMediaManager {
 
         this.audioOsc = osc;
         this.audioGain = gain;
+      }
+    } catch (e) {}
+  }
+
+  private stopWebAudioKeepalive() {
+    try {
+      if (this.audioOsc) {
+        try {
+          this.audioOsc.stop();
+          this.audioOsc.disconnect();
+        } catch (e) {}
+        this.audioOsc = null;
+      }
+      if (this.audioGain) {
+        try {
+          this.audioGain.disconnect();
+        } catch (e) {}
+        this.audioGain = null;
+      }
+      if (this.audioCtx && this.audioCtx.state === 'running') {
+        this.audioCtx.suspend().catch(() => {});
       }
     } catch (e) {}
   }
@@ -487,9 +491,13 @@ class BackgroundMediaManager {
   private handleYouTubeStateChange(playerState: number) {
     // YT.PlayerState: -1 (unstarted), 0 (ended), 1 (playing), 2 (paused), 3 (buffering), 5 (video cued)
     if (playerState === 1) {
-      // PLAYING
+      // PLAYING - Active YouTube video playback
       this.state.isPlaying = true;
       this.state.isCapsuleVisible = true;
+      this.startWebAudioKeepalive();
+      if (this.silentAudioElement) {
+        this.silentAudioElement.play().catch(() => {});
+      }
       this.startProgressTracking();
       this.requestWakeLock();
       this.updateMediaSessionState('playing');
@@ -503,7 +511,7 @@ class BackgroundMediaManager {
         this.updateMediaSessionState('playing');
         return;
       }
-      if (typeof document !== 'undefined' && document.hidden && this.state.isBackgroundPlayEnabled) {
+      if (typeof document !== 'undefined' && document.hidden && this.state.isBackgroundPlayEnabled && this.state.currentTrack) {
         this.state.isPlaying = true;
         this.state.isCapsuleVisible = true;
         this.updateMediaSessionState('playing');
@@ -512,16 +520,26 @@ class BackgroundMediaManager {
         return;
       }
       this.state.isPlaying = false;
+      this.state.isCapsuleVisible = false;
+      this.stopWebAudioKeepalive();
+      if (this.silentAudioElement) {
+        this.silentAudioElement.pause();
+      }
       this.releaseWakeLock();
-      this.updateMediaSessionState('paused');
+      this.updateMediaSessionState('none');
     } else if (playerState === 0) {
       // ENDED
       if (Date.now() < this.playLockUntil) {
         return;
       }
       this.state.isPlaying = false;
+      this.state.isCapsuleVisible = false;
+      this.stopWebAudioKeepalive();
+      if (this.silentAudioElement) {
+        this.silentAudioElement.pause();
+      }
       this.releaseWakeLock();
-      this.updateMediaSessionState('paused');
+      this.updateMediaSessionState('none');
     } else if (playerState === 3 || playerState === 5 || playerState === -1) {
       // BUFFERING or CUED or UNSTARTED
       if (this.state.isPlaying || Date.now() < this.playLockUntil) {
@@ -687,12 +705,32 @@ class BackgroundMediaManager {
     document.addEventListener('visibilitychange', () => {
       if (document.hidden) {
         // App went to background / tab switched / minimized
-        if (this.state.currentTrack && this.state.isPlaying && this.state.isBackgroundPlayEnabled) {
+        // STRICT RULE: Only activate Kapsul Ajaib if media is actively playing!
+        const isActivelyPlaying = Boolean(
+          this.state.currentTrack &&
+          this.state.isPlaying &&
+          this.state.isBackgroundPlayEnabled
+        );
+
+        if (isActivelyPlaying) {
           this.state.isPlaying = true;
           this.state.isCapsuleVisible = true;
           this.updateMediaSessionState('playing');
           this.updateMediaSessionPosition();
           this.startProgressTracking();
+          this.startWebAudioKeepalive();
+          if (this.silentAudioElement) {
+            this.silentAudioElement.play().catch(() => {});
+          }
+          this.notify();
+        } else {
+          // NOT actively playing video/youtube: Ensure capsule is hidden and OS audio is idle
+          this.state.isCapsuleVisible = false;
+          this.updateMediaSessionState('none');
+          this.stopWebAudioKeepalive();
+          if (this.silentAudioElement) {
+            this.silentAudioElement.pause();
+          }
           this.notify();
         }
       } else {
@@ -744,8 +782,13 @@ class BackgroundMediaManager {
 
     const onPause = () => {
       this.state.isPlaying = false;
-      this.updateMediaSessionState('paused');
+      this.state.isCapsuleVisible = false;
+      this.updateMediaSessionState('none');
       this.updateMediaSessionPosition();
+      this.stopWebAudioKeepalive();
+      if (this.silentAudioElement) {
+        this.silentAudioElement.pause();
+      }
       this.notify();
     };
 
@@ -776,7 +819,12 @@ class BackgroundMediaManager {
 
     const onEnded = () => {
       this.state.isPlaying = false;
+      this.state.isCapsuleVisible = false;
       this.updateMediaSessionState('none');
+      this.stopWebAudioKeepalive();
+      if (this.silentAudioElement) {
+        this.silentAudioElement.pause();
+      }
       this.notify();
     };
 
@@ -801,8 +849,12 @@ class BackgroundMediaManager {
       this.state.currentTime = Math.floor(element.currentTime);
     }
     this.state.isPlaying = !element.paused;
-    this.updateMediaSessionState(!element.paused ? 'playing' : 'paused');
+    this.state.isCapsuleVisible = !element.paused;
+    this.updateMediaSessionState(!element.paused ? 'playing' : 'none');
     this.updateMediaSessionPosition();
+    if (!element.paused) {
+      this.startWebAudioKeepalive();
+    }
   }
 
   // ==========================================
@@ -812,7 +864,8 @@ class BackgroundMediaManager {
   public registerActiveTrack(
     track: MediaTrackInfo,
     playerType: 'youtube' | 'direct_video' | 'direct_audio' | 'other' = 'youtube',
-    iframeId?: string
+    iframeId?: string,
+    autoPlay: boolean = false
   ) {
     if (iframeId) {
       this.currentIframeId = iframeId;
@@ -820,56 +873,67 @@ class BackgroundMediaManager {
 
     this.state.currentTrack = track;
     this.state.playerType = playerType;
-    this.state.isPlaying = true;
-    this.state.isCapsuleVisible = true;
+    this.state.isPlaying = autoPlay;
+    this.state.isCapsuleVisible = autoPlay;
     this.state.isMuted = false;
     this.state.volume = 100;
     this.state.currentTime = track.currentTime || 0;
     this.state.duration = track.duration || 360;
-    this.playLockUntil = Date.now() + 4000;
 
     this.updateMediaSessionMetadata(track);
-    this.updateMediaSessionState('playing');
-    this.startProgressTracking();
-    this.requestWakeLock();
-    this.updateMediaSessionPosition();
 
-    // Start Web Audio anchor so Android Chrome binds OS media capsule & notification
-    this.startWebAudioKeepalive();
-    if (this.silentAudioElement) {
-      this.silentAudioElement.play().catch(() => {});
-    }
+    if (autoPlay) {
+      this.playLockUntil = Date.now() + 4000;
+      this.updateMediaSessionState('playing');
+      this.startProgressTracking();
+      this.requestWakeLock();
+      this.updateMediaSessionPosition();
 
-    // If native video/audio element is attached, play it directly
-    if (this.activeMediaElement) {
-      this.activeMediaElement.muted = false;
-      this.activeMediaElement.volume = 1.0;
-      this.activeMediaElement.play().catch(() => {});
-    }
-
-    // Auto-unmute and command play immediately with staggered retries for Android speaker output
-    const triggerUnmutePlay = () => {
-      this.sendCommandToIframe('unMute', []);
-      this.sendCommandToIframe('setVolume', [100]);
-      this.sendCommandToIframe('playVideo', []);
-
-      if (this.ytPlayer) {
-        try {
-          if (typeof this.ytPlayer.unMute === 'function') this.ytPlayer.unMute();
-          if (typeof this.ytPlayer.setVolume === 'function') this.ytPlayer.setVolume(100);
-          if (typeof this.ytPlayer.playVideo === 'function') this.ytPlayer.playVideo();
-        } catch (e) {}
+      // Start Web Audio anchor so Android Chrome binds OS media capsule & notification
+      this.startWebAudioKeepalive();
+      if (this.silentAudioElement) {
+        this.silentAudioElement.play().catch(() => {});
       }
 
-      if (this.activeMediaElement && this.activeMediaElement.paused) {
+      // If native video/audio element is attached, play it directly
+      if (this.activeMediaElement) {
+        this.activeMediaElement.muted = false;
+        this.activeMediaElement.volume = 1.0;
         this.activeMediaElement.play().catch(() => {});
       }
-    };
 
-    triggerUnmutePlay();
-    setTimeout(triggerUnmutePlay, 250);
-    setTimeout(triggerUnmutePlay, 700);
-    setTimeout(triggerUnmutePlay, 1300);
+      // Auto-unmute and command play immediately with staggered retries for Android speaker output
+      const triggerUnmutePlay = () => {
+        this.sendCommandToIframe('unMute', []);
+        this.sendCommandToIframe('setVolume', [100]);
+        this.sendCommandToIframe('playVideo', []);
+
+        if (this.ytPlayer) {
+          try {
+            if (typeof this.ytPlayer.unMute === 'function') this.ytPlayer.unMute();
+            if (typeof this.ytPlayer.setVolume === 'function') this.ytPlayer.setVolume(100);
+            if (typeof this.ytPlayer.playVideo === 'function') this.ytPlayer.playVideo();
+          } catch (e) {}
+        }
+
+        if (this.activeMediaElement && this.activeMediaElement.paused) {
+          this.activeMediaElement.play().catch(() => {});
+        }
+      };
+
+      triggerUnmutePlay();
+      setTimeout(triggerUnmutePlay, 250);
+      setTimeout(triggerUnmutePlay, 700);
+      setTimeout(triggerUnmutePlay, 1300);
+    } else {
+      // Inactive / queued track only - DO NOT trigger capsule or background audio
+      this.updateMediaSessionState('none');
+      this.stopWebAudioKeepalive();
+      if (this.silentAudioElement) {
+        this.silentAudioElement.pause();
+      }
+      this.releaseWakeLock();
+    }
 
     this.notify();
   }
@@ -923,9 +987,12 @@ class BackgroundMediaManager {
 
   public pause() {
     this.state.isPlaying = false;
+    this.state.isCapsuleVisible = false;
 
-    this.updateMediaSessionState('paused');
+    this.updateMediaSessionState('none');
     this.updateMediaSessionPosition();
+
+    this.stopWebAudioKeepalive();
 
     if (this.silentAudioElement) {
       this.silentAudioElement.pause();
@@ -1048,6 +1115,12 @@ class BackgroundMediaManager {
   }
 
   public setCapsuleVisible(visible: boolean) {
+    // Only allow capsule visibility if there is an active track and it is playing
+    if (visible && (!this.state.currentTrack || !this.state.isPlaying)) {
+      this.state.isCapsuleVisible = false;
+      this.notify();
+      return;
+    }
     this.state.isCapsuleVisible = visible;
     this.notify();
   }
