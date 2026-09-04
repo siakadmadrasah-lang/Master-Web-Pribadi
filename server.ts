@@ -3664,24 +3664,74 @@ app.get('/api/backup/full', async (req, res) => {
   }
 });
 
-// 2. Restore Backup JSON Endpoint
+// Helper: Extract JSON data from SQL script
+function parseSiteDataFromSql(sql: string): any | null {
+  try {
+    const regex = /VALUES\s*\(\s*['"]site_data['"]\s*,\s*['"]((?:[^'"]|\\['"]|'')+)['"]/i;
+    const match = sql.match(regex);
+    if (match && match[1]) {
+      let rawVal = match[1]
+        .replace(/\\'/g, "'")
+        .replace(/\\"/g, '"')
+        .replace(/\\\\/g, '\\')
+        .replace(/\\n/g, '\n')
+        .replace(/\\r/g, '\r')
+        .replace(/\\t/g, '\t');
+      return JSON.parse(rawVal);
+    }
+    const jsonMatch = sql.match(/\{[\s\S]*"siteContent"[\s\S]*\}/);
+    if (jsonMatch) {
+      return JSON.parse(jsonMatch[0]);
+    }
+  } catch (e) {
+    console.warn('parseSiteDataFromSql failed', e);
+  }
+  return null;
+}
+
+// Multer in-memory upload for ZIP restore
+const backupZipMulter = multer({
+  storage: multer.memoryStorage(),
+  limits: { fileSize: 500 * 1024 * 1024 } // 500 MB max
+});
+
+// 2. Restore Backup JSON / SQL Endpoint
 app.post('/api/backup/restore', async (req, res) => {
   try {
-    const payload = req.body;
-    if (!payload || typeof payload !== 'object') {
-      return res.status(400).json({ success: false, error: 'Berkas JSON cadangan tidak valid atau kosong' });
+    let payload = req.body;
+    if (typeof payload === 'string') {
+      try {
+        payload = JSON.parse(payload);
+      } catch (e) {
+        // Check if raw SQL string was posted
+        if (payload.includes('site_data') || payload.includes('INSERT INTO')) {
+          payload = { _rawSqlText: payload };
+        }
+      }
     }
 
-    // Identify nested structure or flat structure
+    if (!payload || typeof payload !== 'object') {
+      return res.status(400).json({ success: false, error: 'Berkas cadangan tidak valid atau kosong' });
+    }
+
+    // If SQL dump text was supplied
+    if (payload._rawSqlText || payload.sql) {
+      const extracted = parseSiteDataFromSql(payload._rawSqlText || payload.sql);
+      if (extracted) {
+        payload = extracted;
+      }
+    }
+
+    // Identify nested structure, snapshot format, or flat structure
     let incomingData = payload.data ? payload.data : payload;
     let siteContent = incomingData.siteContent || payload.siteContent;
     let logoConfig = incomingData.logoConfig || payload.logoConfig;
     let stickyFooterConfig = incomingData.stickyFooterConfig || payload.stickyFooterConfig;
 
-    // Fallback: If root contains direct profile object
-    if (!siteContent && payload.profile) {
+    // Fallback: If root contains direct profile or sections
+    if (!siteContent && (payload.profile || payload.publications || payload.agenda || payload.pillars)) {
       siteContent = {
-        profile: payload.profile,
+        profile: payload.profile || defaultInitialSiteData.siteContent.profile,
         education: payload.education || [],
         pillars: payload.pillars || [],
         quotes: payload.quotes || [],
@@ -3698,7 +3748,7 @@ app.post('/api/backup/restore', async (req, res) => {
     if (!siteContent && !logoConfig && !stickyFooterConfig) {
       return res.status(400).json({
         success: false,
-        error: 'Format data cadangan tidak dikenali. Pastikan berkas JSON berasal dari ekspor cadangan website ini.'
+        error: 'Format data cadangan tidak dikenali. Pastikan berkas berasal dari ekspor cadangan website ini.'
       });
     }
 
@@ -3778,6 +3828,172 @@ app.post('/api/backup/restore', async (req, res) => {
   } catch (err: any) {
     console.error('Error restoring backup:', err);
     res.status(500).json({ success: false, error: err.message || 'Gagal memulihkan cadangan data' });
+  }
+});
+
+// 2b. Restore from Full ZIP Archive (.ZIP containing data & uploads)
+app.post('/api/backup/restore-zip', backupZipMulter.single('backupZip'), async (req, res) => {
+  try {
+    const file = req.file;
+    if (!file || !file.buffer) {
+      return res.status(400).json({ success: false, error: 'Tidak ada berkas ZIP yang diunggah' });
+    }
+
+    const zip = await JSZip.loadAsync(file.buffer);
+
+    // 1. Locate JSON site data or SQL in zip
+    let jsonContentStr: string | null = null;
+    const candidatePaths = [
+      'data/persisted_site_data.json',
+      'persisted_site_data.json',
+      'data/site_data.default.json',
+      'site_data.default.json',
+      'data/site_data.json',
+      'site_data.json',
+      'backup.json'
+    ];
+
+    for (const p of candidatePaths) {
+      const entry = zip.file(p);
+      if (entry) {
+        jsonContentStr = await entry.async('string');
+        break;
+      }
+    }
+
+    if (!jsonContentStr) {
+      for (const [relativePath, zipEntry] of Object.entries(zip.files)) {
+        if (!zipEntry.dir && relativePath.endsWith('.json')) {
+          try {
+            const testStr = await zipEntry.async('string');
+            const testObj = JSON.parse(testStr);
+            if (testObj?.siteContent || testObj?.data?.siteContent || testObj?.profile) {
+              jsonContentStr = testStr;
+              break;
+            }
+          } catch (e) {}
+        }
+      }
+    }
+
+    if (!jsonContentStr) {
+      for (const [relativePath, zipEntry] of Object.entries(zip.files)) {
+        if (!zipEntry.dir && relativePath.endsWith('.sql')) {
+          const sqlStr = await zipEntry.async('string');
+          const extracted = parseSiteDataFromSql(sqlStr);
+          if (extracted) {
+            jsonContentStr = JSON.stringify(extracted);
+            break;
+          }
+        }
+      }
+    }
+
+    if (!jsonContentStr) {
+      return res.status(400).json({
+        success: false,
+        error: 'Berkas ZIP tidak memuat data website (.json atau database.sql yang valid).'
+      });
+    }
+
+    const payload = JSON.parse(jsonContentStr);
+
+    // 2. Extract uploaded files from ZIP into data/uploads and public/assets/uploads
+    let restoredFilesCount = 0;
+    const uploadsDataDir = path.join(process.cwd(), 'data', 'uploads');
+    const uploadsPublicDir = path.join(process.cwd(), 'public', 'assets', 'uploads');
+    if (!fs.existsSync(uploadsDataDir)) fs.mkdirSync(uploadsDataDir, { recursive: true });
+    if (!fs.existsSync(uploadsPublicDir)) fs.mkdirSync(uploadsPublicDir, { recursive: true });
+
+    for (const [relPath, zipEntry] of Object.entries(zip.files)) {
+      if (!zipEntry.dir && (relPath.startsWith('uploads/') || relPath.startsWith('data/uploads/'))) {
+        const fileName = path.basename(relPath);
+        if (fileName && !fileName.startsWith('.')) {
+          const fileData = await zipEntry.async('nodebuffer');
+          fs.writeFileSync(path.join(uploadsDataDir, fileName), fileData);
+          try {
+            fs.writeFileSync(path.join(uploadsPublicDir, fileName), fileData);
+          } catch (e) {}
+          restoredFilesCount++;
+        }
+      }
+    }
+
+    // 3. Create safety snapshot before applying
+    const safetySnapshot = createSnapshotHelper('restore', 'Snapshot Otomatis Sebelum Pemulihan Paket ZIP');
+
+    // 4. Merge data
+    let incomingData = payload.data ? payload.data : payload;
+    let siteContent = incomingData.siteContent || payload.siteContent;
+    let logoConfig = incomingData.logoConfig || payload.logoConfig;
+    let stickyFooterConfig = incomingData.stickyFooterConfig || payload.stickyFooterConfig;
+
+    if (!siteContent && (payload.profile || payload.publications || payload.agenda || payload.pillars)) {
+      siteContent = {
+        profile: payload.profile || defaultInitialSiteData.siteContent.profile,
+        education: payload.education || [],
+        pillars: payload.pillars || [],
+        quotes: payload.quotes || [],
+        publications: payload.publications || [],
+        experience: payload.experience || payload.experiences || [],
+        agenda: payload.agenda || [],
+        gallery: payload.gallery || [],
+        visibility: payload.visibility || defaultInitialSiteData.siteContent.visibility,
+        heroSettings: payload.heroSettings || defaultInitialSiteData.siteContent.heroSettings,
+        shareSettings: payload.shareSettings || defaultInitialSiteData.siteContent.shareSettings
+      };
+    }
+
+    const current = cachedSiteData || loadSiteDataFromFile() || defaultInitialSiteData;
+    const restoredData = {
+      ...current,
+      lastUpdated: Date.now()
+    };
+
+    if (siteContent) {
+      restoredData.siteContent = {
+        ...current.siteContent,
+        ...siteContent,
+        profile: { ...(current.siteContent?.profile || {}), ...(siteContent.profile || {}) },
+        education: Array.isArray(siteContent.education) ? siteContent.education : current.siteContent?.education,
+        pillars: Array.isArray(siteContent.pillars) ? siteContent.pillars : current.siteContent?.pillars,
+        quotes: Array.isArray(siteContent.quotes) ? siteContent.quotes : current.siteContent?.quotes,
+        publications: Array.isArray(siteContent.publications) ? siteContent.publications : current.siteContent?.publications,
+        experience: Array.isArray(siteContent.experience) ? siteContent.experience : (Array.isArray(siteContent.experiences) ? siteContent.experiences : current.siteContent?.experience),
+        agenda: Array.isArray(siteContent.agenda) ? siteContent.agenda : current.siteContent?.agenda,
+        gallery: Array.isArray(siteContent.gallery) ? siteContent.gallery : current.siteContent?.gallery,
+        visibility: { ...(current.siteContent?.visibility || {}), ...(siteContent.visibility || {}) },
+        heroSettings: { ...(current.siteContent?.heroSettings || {}), ...(siteContent.heroSettings || {}) },
+        shareSettings: { ...(current.siteContent?.shareSettings || {}), ...(siteContent.shareSettings || {}) }
+      };
+    }
+
+    if (logoConfig) {
+      restoredData.logoConfig = { ...(current.logoConfig || {}), ...logoConfig };
+    }
+
+    if (stickyFooterConfig) {
+      restoredData.stickyFooterConfig = {
+        ...(current.stickyFooterConfig || {}),
+        ...stickyFooterConfig,
+        items: Array.isArray(stickyFooterConfig.items) ? stickyFooterConfig.items : (current.stickyFooterConfig?.items || [])
+      };
+    }
+
+    const saved = await saveSiteDataToDBAndFile(restoredData);
+    const stats = calculateBackupStats(restoredData);
+
+    res.json({
+      success: saved,
+      message: `Paket cadangan ZIP berhasil dipulihkan! ${restoredFilesCount} berkas media disinkronkan.`,
+      restoredData,
+      stats,
+      safetySnapshotId: safetySnapshot?.id,
+      restoredFilesCount
+    });
+  } catch (err: any) {
+    console.error('Error restoring ZIP backup:', err);
+    res.status(500).json({ success: false, error: err.message || 'Gagal memulihkan berkas ZIP' });
   }
 });
 
@@ -6003,6 +6219,112 @@ Berkas data live (persisted_site_data.json, messages.json, db_config.local.php) 
   } catch (err: any) {
     console.error('Error generating Plesk ZIP:', err);
     res.status(500).json({ success: false, error: err.message || 'Gagal membuat paket ZIP Plesk' });
+  }
+});
+
+// Export cPanel Zip Endpoint
+app.get('/api/export-cpanel-zip', async (req, res) => {
+  try {
+    const currentData = cachedSiteData || loadSiteDataFromFile();
+    const zip = new JSZip();
+
+    // 1. Root Database & Config files for cPanel
+    zip.file('database.sql', generateSqlContent(currentData));
+    zip.file('db_config.php', generatePleskDbConfigPhp());
+    zip.file('.htaccess', generatePleskHtaccess());
+    zip.file('index.php', generatePleskIndexPhp());
+    zip.file('unzip.php', generatePleskUnzipPhp());
+    zip.file('README_CPANEL.md', generatePleskReadme());
+    zip.file('PANDUAN_HOSTING_CPANEL.txt', generatePleskReadme());
+
+    // 2. Folder api/
+    const apiFolder = zip.folder('api');
+    if (apiFolder) {
+      apiFolder.file('site-data.php', generatePleskApiSiteData());
+      apiFolder.file('site-content.php', generatePleskApiSiteContent());
+      apiFolder.file('logo-config.php', generatePleskApiLogoConfig());
+      apiFolder.file('sticky-footer-config.php', generatePleskApiStickyFooterConfig());
+      apiFolder.file('sync-to-mysql.php', generatePleskApiSyncToMysql());
+      apiFolder.file('share-settings.php', generatePleskApiShareSettings());
+      apiFolder.file('upload-thumbnail.php', generatePleskApiUploadThumbnail());
+      apiFolder.file('sync-status.php', generatePleskApiSyncStatus());
+      apiFolder.file('upload-image.php', generatePleskApiUploadImage());
+      apiFolder.file('upload-file.php', generatePleskApiUploadImage());
+      apiFolder.file('upload-video-chunk.php', generatePleskApiUploadVideoChunk());
+      apiFolder.file('upload-video-form.php', generatePleskApiUploadVideoForm());
+      apiFolder.file('admin-login.php', generatePleskApiAdminLogin());
+      apiFolder.file('messages.php', generatePleskApiMessages());
+      apiFolder.file('settings.php', generatePleskApiSettings());
+      apiFolder.file('test_db.php', generatePleskApiTestDb());
+      apiFolder.file('db_config.php', generatePleskDbConfigPhp());
+    }
+
+    // 3. Folder data/
+    const dataFolder = zip.folder('data');
+    if (dataFolder) {
+      const fullJson = JSON.stringify(currentData, null, 2);
+      dataFolder.file('site_data.default.json', fullJson);
+      dataFolder.file('persisted_site_data.json', fullJson);
+      dataFolder.file('mysql_config.default.json', JSON.stringify(currentMySQLConfig, null, 2));
+      dataFolder.file('PERLINDUNGAN_DATA_CPANEL.txt', `SISTEM ANTI DATA-LOSS CPANEL AKTIF:
+Ekstrak isi berkas ZIP ini langsung ke folder public_html pada cPanel Anda.`);
+    }
+
+    // 4. Uploads directory
+    const uploadsDir = fs.existsSync(UPLOADS_PUBLIC_DIR)
+      ? UPLOADS_PUBLIC_DIR
+      : fs.existsSync(UPLOADS_DATA_DIR)
+      ? UPLOADS_DATA_DIR
+      : null;
+
+    if (uploadsDir && fs.existsSync(uploadsDir)) {
+      const uploadsFolder = zip.folder('uploads');
+      const uploadFiles = fs.readdirSync(uploadsDir);
+      for (const file of uploadFiles) {
+        const filePath = path.join(uploadsDir, file);
+        if (fs.statSync(filePath).isFile()) {
+          uploadsFolder?.file(file, fs.readFileSync(filePath));
+        }
+      }
+    }
+
+    // 5. Static dist build if available
+    const distPath = path.join(process.cwd(), 'dist');
+    if (fs.existsSync(distPath)) {
+      const addFolderToZip = (dirPath: string, zipNode: JSZip) => {
+        const items = fs.readdirSync(dirPath);
+        for (const item of items) {
+          const fullPath = path.join(dirPath, item);
+          const stat = fs.statSync(fullPath);
+          if (stat.isDirectory()) {
+            const subZip = zipNode.folder(item);
+            if (subZip) addFolderToZip(fullPath, subZip);
+          } else {
+            zipNode.file(item, fs.readFileSync(fullPath));
+          }
+        }
+      };
+      addFolderToZip(distPath, zip);
+    } else {
+      const indexPath = path.join(process.cwd(), 'index.html');
+      if (fs.existsSync(indexPath)) {
+        zip.file('index.html', fs.readFileSync(indexPath, 'utf-8'));
+      }
+    }
+
+    const zipBuffer = await zip.generateAsync({
+      type: 'nodebuffer',
+      compression: 'DEFLATE',
+      compressionOptions: { level: 6 }
+    });
+
+    res.setHeader('Content-Type', 'application/zip');
+    res.setHeader('Content-Disposition', 'attachment; filename="Web-Personal-Ust-Jaenal-cPanel-Hosting.zip"');
+    res.setHeader('Content-Length', zipBuffer.length);
+    res.send(zipBuffer);
+  } catch (err: any) {
+    console.error('Error generating cPanel ZIP:', err);
+    res.status(500).json({ success: false, error: err.message || 'Gagal membuat paket ZIP cPanel' });
   }
 });
 

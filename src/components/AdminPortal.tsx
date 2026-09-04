@@ -62,6 +62,7 @@ import {
   SunMedium,
   HardDrive,
   Video,
+  FolderArchive,
 } from 'lucide-react';
 import {
   profileData,
@@ -89,6 +90,7 @@ import {
 import { SiteContentEditor } from './SiteContentEditor';
 import { BackupManager } from './BackupManager';
 import { downloadPleskPackageZip, triggerZipDownload, PLESK_DB_CONFIG } from '../utils/pleskExporter';
+import { downloadCpanelPackageZip, CPANEL_DB_CONFIG } from '../utils/cpanelExporter';
 
 interface AdminPortalProps {
   isOpen: boolean;
@@ -123,7 +125,7 @@ export const AdminPortal: React.FC<AdminPortalProps> = ({
   const [isLoading, setIsLoading] = useState(false);
 
   // Admin Dashboard Tabs
-  const [activeTab, setActiveTab] = useState<'ringkasan' | 'site_editor' | 'thumbnail' | 'karya' | 'agenda' | 'pesan' | 'logo' | 'footer' | 'backup' | 'users' | 'plesk'>('ringkasan');
+  const [activeTab, setActiveTab] = useState<'ringkasan' | 'site_editor' | 'thumbnail' | 'karya' | 'agenda' | 'pesan' | 'logo' | 'footer' | 'backup' | 'users' | 'plesk' | 'cpanel'>('ringkasan');
 
   // Admin User & Password Management States
   const [adminUser, setAdminUser] = useState<{
@@ -1430,6 +1432,56 @@ export const AdminPortal: React.FC<AdminPortalProps> = ({
     }
   };
 
+  // cPanel ZIP export states & handlers
+  const [isExportingCpanelAdmin, setIsExportingCpanelAdmin] = useState(false);
+  const [cpanelAdminProgress, setCpanelAdminProgress] = useState<{ percent: number; message: string } | null>(null);
+  const [activeCpanelGuideStep, setActiveCpanelGuideStep] = useState<number>(1);
+
+  const handleDownloadCpanelZipAdmin = async () => {
+    if (isExportingCpanelAdmin) return;
+    setIsExportingCpanelAdmin(true);
+    setCpanelAdminProgress({ percent: 15, message: 'Menyiapkan berkas cPanel (database.sql, .htaccess & PHP API)...' });
+
+    try {
+      const currentFullContent = siteContent ? {
+        ...siteContent,
+        publications,
+        agenda: agendas
+      } : undefined;
+
+      const zipBlob = await downloadCpanelPackageZip(
+        currentFullContent,
+        draftLogo,
+        draftFooter,
+        (percent, message) => {
+          setCpanelAdminProgress({ percent, message });
+        }
+      );
+      triggerZipDownload(zipBlob, 'Web-Personal-Ust-Jaenal-cPanel-Hosting.zip');
+      showToast('✅ Paket ZIP Hosting cPanel berhasil diunduh!');
+      setTimeout(() => {
+        setIsExportingCpanelAdmin(false);
+        setCpanelAdminProgress(null);
+      }, 1500);
+    } catch (err) {
+      console.warn('Client-side ZIP cPanel creation fallback to server:', err);
+      try {
+        const res = await fetch('/api/export-cpanel-zip');
+        if (res.ok) {
+          const blob = await res.blob();
+          triggerZipDownload(blob, 'Web-Personal-Ust-Jaenal-cPanel-Hosting.zip');
+          showToast('✅ Paket ZIP Hosting cPanel berhasil diunduh dari server!');
+        } else {
+          showToast('❌ Gagal mengunduh paket ZIP cPanel dari server.');
+        }
+      } catch (fErr) {
+        showToast('❌ Terjadi kesalahan jaringan saat mengunduh ZIP cPanel.');
+      }
+      setIsExportingCpanelAdmin(false);
+      setCpanelAdminProgress(null);
+    }
+  };
+
   const handleDownloadDatabaseSqlAdmin = () => {
     try {
       const currentFullContent = siteContent ? {
@@ -1771,6 +1823,37 @@ export const AdminPortal: React.FC<AdminPortalProps> = ({
               <span className="text-[9px] px-1.5 py-0.2 rounded-full bg-amber-400 text-emerald-950 font-extrabold shadow-xs">
                 ZIP
               </span>
+            </button>
+
+            {/* 11b. Modul Hosting cPanel (PHP + MySQL Ready) */}
+            <button
+              id="admin-navbar-cpanel-btn"
+              type="button"
+              onClick={() => setActiveTab('cpanel')}
+              className={`px-3.5 py-1.5 rounded-xl text-xs font-bold flex items-center gap-1.5 transition-all cursor-pointer active:scale-95 ${
+                activeTab === 'cpanel'
+                  ? 'bg-gradient-to-r from-orange-400 to-amber-400 text-slate-950 font-black shadow-md border border-orange-300 scale-[1.02]'
+                  : 'bg-emerald-950/80 hover:bg-emerald-900 text-orange-300 border border-orange-400/60 hover:border-orange-300'
+              }`}
+            >
+              <FolderArchive className="w-3.5 h-3.5 text-orange-400" />
+              <span>Hosting cPanel</span>
+              <span className="text-[9px] px-1.5 py-0.2 rounded-full bg-orange-400 text-slate-950 font-extrabold shadow-xs">
+                public_html
+              </span>
+            </button>
+
+            {/* Direct 1-Click Unduh ZIP cPanel Button in Sub-Header Menu */}
+            <button
+              id="admin-navbar-quick-cpanel-zip-btn"
+              type="button"
+              onClick={handleDownloadCpanelZipAdmin}
+              disabled={isExportingCpanelAdmin}
+              className="px-3.5 py-1.5 rounded-xl text-xs font-black flex items-center gap-1.5 transition-all cursor-pointer active:scale-95 bg-gradient-to-r from-orange-500 via-amber-400 to-amber-500 hover:from-orange-400 hover:to-amber-300 text-slate-950 shadow-md border border-orange-300 animate-pulse hover:animate-none"
+              title="Unduh langsung paket ZIP cPanel lengkap untuk diekstrak ke public_html"
+            >
+              <Download className={`w-3.5 h-3.5 ${isExportingCpanelAdmin ? 'animate-bounce' : ''}`} />
+              <span>{isExportingCpanelAdmin ? 'Mengemas ZIP...' : 'Unduh ZIP cPanel'}</span>
             </button>
 
             {/* 12. Pengelolaan Akun & Password Admin */}
@@ -6129,6 +6212,338 @@ export const AdminPortal: React.FC<AdminPortalProps> = ({
                               <span>.htaccess & README</span>
                             </div>
                             <p className="text-[10px] text-gray-600">Aturan rewrite URL Apache & buku panduan deployment lengkap.</p>
+                          </div>
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              )}
+
+              {/* ============================================================ */}
+              {/* TAB 13: MODUL EKSPOR & HOSTING CPANEL (PUBLIC_HTML) */}
+              {/* ============================================================ */}
+              {activeTab === 'cpanel' && (
+                <div className="space-y-6 animate-fadeIn max-w-6xl mx-auto">
+                  {/* Header Banner */}
+                  <div className="bg-gradient-to-r from-[#7c2d12] via-[#9a3412] to-[#431407] p-6 sm:p-8 rounded-3xl border-2 border-orange-400/90 shadow-xl text-white flex flex-col lg:flex-row items-start lg:items-center justify-between gap-6">
+                    <div className="space-y-2 max-w-3xl">
+                      <div className="flex items-center gap-2 text-orange-300 flex-wrap">
+                        <FolderArchive className="w-6 h-6 text-orange-400" />
+                        <span className="text-xs font-bold uppercase tracking-wider">Modul Deploy cPanel</span>
+                        <span className="bg-orange-400 text-slate-950 text-[10px] font-black px-2.5 py-0.5 rounded-full shadow-xs">
+                          cPanel Ready
+                        </span>
+                        <span className="bg-orange-950/80 text-orange-200 text-[10px] font-semibold px-2 py-0.5 rounded-full border border-orange-600/70">
+                          Ekstrak ke public_html
+                        </span>
+                        <span className="bg-emerald-900 text-emerald-200 text-[10px] font-semibold px-2 py-0.5 rounded-full border border-emerald-700">
+                          PHP + MySQL Native
+                        </span>
+                      </div>
+                      <h3 className="text-xl sm:text-2xl font-bold text-white tracking-tight">
+                        Paket Siap Unggah Hosting cPanel
+                      </h3>
+                      <p className="text-xs sm:text-sm text-orange-100/90 leading-relaxed">
+                        Unduh 1 berkas ZIP mandiri yang dirancang khusus untuk struktur hosting cPanel (folder <code>public_html</code>). Dilengkapi skrip auto-unzip, database SQL lengkap, konfigurasi PDO MySQL, dan endpoint API backend mandiri.
+                      </p>
+                    </div>
+
+                    <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-3 shrink-0 w-full lg:w-auto">
+                      <button
+                        type="button"
+                        onClick={handleDownloadDatabaseSqlAdmin}
+                        className="px-4 py-3 rounded-2xl bg-orange-950/90 hover:bg-orange-900 text-orange-300 border border-orange-400/50 text-xs font-bold flex items-center justify-center gap-2 transition-all shadow-sm active:scale-95 cursor-pointer"
+                        title="Unduh berkas skrip SQL untuk diimpor ke phpMyAdmin cPanel"
+                      >
+                        <Database className="w-4 h-4 text-orange-400" />
+                        <span>Unduh database.sql</span>
+                      </button>
+
+                      <button
+                        type="button"
+                        onClick={handleDownloadCpanelZipAdmin}
+                        disabled={isExportingCpanelAdmin}
+                        className="px-6 py-3 rounded-2xl bg-gradient-to-r from-orange-400 via-amber-300 to-amber-400 hover:from-orange-300 hover:to-amber-300 text-slate-950 font-black text-xs sm:text-sm flex items-center justify-center gap-2 shadow-lg transition-all active:scale-95 disabled:opacity-50 cursor-pointer"
+                      >
+                        <Download className="w-4 h-4 text-slate-950" />
+                        <span>{isExportingCpanelAdmin ? 'Mengemas ZIP...' : 'Unduh Paket ZIP cPanel'}</span>
+                      </button>
+                    </div>
+                  </div>
+
+                  {/* Progress Bar */}
+                  {cpanelAdminProgress && (
+                    <div className="p-4 bg-orange-950/90 rounded-2xl border-2 border-orange-400/60 text-white shadow-md animate-fadeIn space-y-2">
+                      <div className="flex justify-between text-xs font-bold text-orange-300">
+                        <span className="flex items-center gap-2">
+                          <RefreshCw className="w-4 h-4 animate-spin text-orange-400" />
+                          <span>{cpanelAdminProgress.message}</span>
+                        </span>
+                        <span>{cpanelAdminProgress.percent}%</span>
+                      </div>
+                      <div className="w-full bg-orange-950 h-2.5 rounded-full overflow-hidden border border-orange-800">
+                        <div
+                          className="bg-gradient-to-r from-orange-400 to-amber-300 h-full transition-all duration-300"
+                          style={{ width: `${cpanelAdminProgress.percent}%` }}
+                        />
+                      </div>
+                    </div>
+                  )}
+
+                  {/* Main Grid Content */}
+                  <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
+                    {/* Left Column (5 Cols) */}
+                    <div className="lg:col-span-5 space-y-6">
+                      {/* Database Credentials Helper Card */}
+                      <div className="bg-white p-6 rounded-3xl border-2 border-orange-200 shadow-md space-y-4">
+                        <div className="flex items-center justify-between border-b border-gray-100 pb-3">
+                          <h4 className="text-sm font-bold text-gray-900 flex items-center gap-2">
+                            <Database className="w-4 h-4 text-orange-600" />
+                            <span>Konfigurasi Database cPanel</span>
+                          </h4>
+                          <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-orange-100 text-orange-800">
+                            db_config.php
+                          </span>
+                        </div>
+
+                        <p className="text-xs text-gray-600 leading-relaxed">
+                          Sesuaikan nilai di bawah dengan database yang Anda buat di menu <strong>MySQL Databases</strong> cPanel:
+                        </p>
+
+                        <div className="space-y-3 font-mono text-xs">
+                          <div>
+                            <span className="text-[10px] font-bold text-gray-500 block uppercase mb-1">Host Database:</span>
+                            <div className="flex items-center justify-between bg-orange-50/70 p-2.5 rounded-xl border border-orange-200">
+                              <span className="font-bold text-orange-950">localhost</span>
+                              <button
+                                type="button"
+                                onClick={() => handleCopyText('localhost', 'DB Host')}
+                                className="text-[10px] text-orange-800 hover:text-orange-950 font-bold px-2 py-0.5 rounded bg-orange-200/80 cursor-pointer"
+                              >
+                                Salin
+                              </button>
+                            </div>
+                          </div>
+
+                          <div>
+                            <span className="text-[10px] font-bold text-gray-500 block uppercase mb-1">Nama Database cPanel:</span>
+                            <div className="flex items-center justify-between bg-orange-50/70 p-2.5 rounded-xl border border-orange-200">
+                              <span className="font-bold text-orange-950">{CPANEL_DB_CONFIG.dbName}</span>
+                              <button
+                                type="button"
+                                onClick={() => handleCopyText(CPANEL_DB_CONFIG.dbName, 'Nama DB')}
+                                className="text-[10px] text-orange-800 hover:text-orange-950 font-bold px-2 py-0.5 rounded bg-orange-200/80 cursor-pointer"
+                              >
+                                Salin
+                              </button>
+                            </div>
+                            <span className="text-[10px] text-gray-500 block mt-0.5 font-sans">
+                              (Catatan di cPanel: biasanya memiliki prefix username akun, misal: <code>usercpanel_jaenalweb</code>)
+                            </span>
+                          </div>
+
+                          <div>
+                            <span className="text-[10px] font-bold text-gray-500 block uppercase mb-1">Nama Pengguna (User):</span>
+                            <div className="flex items-center justify-between bg-orange-50/70 p-2.5 rounded-xl border border-orange-200">
+                              <span className="font-bold text-orange-950">{CPANEL_DB_CONFIG.username}</span>
+                              <button
+                                type="button"
+                                onClick={() => handleCopyText(CPANEL_DB_CONFIG.username, 'DB User')}
+                                className="text-[10px] text-orange-800 hover:text-orange-950 font-bold px-2 py-0.5 rounded bg-orange-200/80 cursor-pointer"
+                              >
+                                Salin
+                              </button>
+                            </div>
+                          </div>
+                        </div>
+                      </div>
+
+                      {/* Direct Server Download Card */}
+                      <div className="bg-gradient-to-br from-[#431407] to-[#1c1917] text-white p-6 rounded-3xl border-2 border-orange-400/80 shadow-md space-y-4">
+                        <div className="flex items-center gap-2 text-orange-300">
+                          <FolderDown className="w-5 h-5 text-orange-400" />
+                          <h4 className="text-sm font-bold text-white">Unduh Langsung dari Server cPanel</h4>
+                        </div>
+                        <p className="text-xs text-orange-100/90 leading-relaxed">
+                          Anda juga dapat mengunduh paket ZIP siap pakai langsung dari server backend:
+                        </p>
+                        <a
+                          href="/api/export-cpanel-zip"
+                          target="_blank"
+                          rel="noreferrer"
+                          className="w-full py-2.5 px-4 rounded-xl bg-orange-400 hover:bg-orange-300 text-slate-950 text-xs font-black flex items-center justify-center gap-2 shadow-sm transition-all"
+                        >
+                          <Download className="w-3.5 h-3.5" />
+                          <span>Unduh via /api/export-cpanel-zip</span>
+                        </a>
+                      </div>
+                    </div>
+
+                    {/* Right Column (7 Cols) */}
+                    <div className="lg:col-span-7 space-y-6">
+                      {/* Step by Step Guide for cPanel */}
+                      <div className="bg-white p-6 sm:p-7 rounded-3xl border-2 border-orange-200 shadow-md space-y-5">
+                        <div className="flex items-center justify-between border-b border-gray-100 pb-3">
+                          <h4 className="text-sm font-bold text-gray-900 flex items-center gap-2">
+                            <Layers className="w-4 h-4 text-orange-600" />
+                            <span>Panduan 4 Langkah Instalasi di cPanel</span>
+                          </h4>
+                          <span className="text-xs text-gray-500 font-medium">Mudah & Cepat</span>
+                        </div>
+
+                        {/* Step Tab Buttons */}
+                        <div className="grid grid-cols-4 gap-2">
+                          {[
+                            { step: 1, title: '1. Buat DB' },
+                            { step: 2, title: '2. Impor SQL' },
+                            { step: 3, title: '3. Unggah ZIP' },
+                            { step: 4, title: '4. Ekstrak & Selesai' }
+                          ].map(s => (
+                            <button
+                              key={s.step}
+                              type="button"
+                              onClick={() => setActiveCpanelGuideStep(s.step)}
+                              className={`py-2 px-1 rounded-xl text-xs font-bold transition-all text-center cursor-pointer ${
+                                activeCpanelGuideStep === s.step
+                                  ? 'bg-orange-600 text-white shadow-sm border border-orange-500'
+                                  : 'bg-gray-100 text-gray-600 hover:bg-gray-200'
+                              }`}
+                            >
+                              {s.title}
+                            </button>
+                          ))}
+                        </div>
+
+                        {/* Step Content Details */}
+                        <div className="p-4 sm:p-5 bg-[#faf8f5] rounded-2xl border border-gray-200 min-h-[160px]">
+                          {activeCpanelGuideStep === 1 && (
+                            <div className="space-y-2.5 animate-fadeIn">
+                              <div className="flex items-center gap-2 text-orange-950 font-bold text-sm">
+                                <span className="w-6 h-6 rounded-full bg-orange-600 text-white flex items-center justify-center text-xs">1</span>
+                                <h5>Buat Database MySQL di cPanel</h5>
+                              </div>
+                              <p className="text-xs text-gray-600 leading-relaxed">
+                                Buka cPanel hosting Anda, cari menu <strong>MySQL® Databases</strong> atau <strong>MySQL Database Wizard</strong>:
+                              </p>
+                              <ul className="text-xs text-gray-700 space-y-1 list-disc pl-5">
+                                <li>Buat nama database baru (misal: <code>jaenal_masterweb</code>).</li>
+                                <li>Buat pengguna database (user) dan tentukan kata sandi yang kuat.</li>
+                                <li>Hubungkan pengguna ke database dan centang <strong>ALL PRIVILEGES</strong>.</li>
+                              </ul>
+                            </div>
+                          )}
+
+                          {activeCpanelGuideStep === 2 && (
+                            <div className="space-y-2.5 animate-fadeIn">
+                              <div className="flex items-center gap-2 text-orange-950 font-bold text-sm">
+                                <span className="w-6 h-6 rounded-full bg-orange-600 text-white flex items-center justify-center text-xs">2</span>
+                                <h5>Impor Berkas database.sql ke phpMyAdmin</h5>
+                              </div>
+                              <p className="text-xs text-gray-600 leading-relaxed">
+                                Buka menu <strong>phpMyAdmin</strong> di cPanel:
+                              </p>
+                              <ul className="text-xs text-gray-700 space-y-1 list-disc pl-5">
+                                <li>Pilih database yang baru saja dibuat di panel sebelah kiri.</li>
+                                <li>Klik tab menu <strong>Import</strong> di bagian atas.</li>
+                                <li>Pilih berkas <code>database.sql</code> yang telah Anda unduh dari tombol di atas, lalu klik <strong>Go / Impor</strong>.</li>
+                              </ul>
+                            </div>
+                          )}
+
+                          {activeCpanelGuideStep === 3 && (
+                            <div className="space-y-2.5 animate-fadeIn">
+                              <div className="flex items-center gap-2 text-orange-950 font-bold text-sm">
+                                <span className="w-6 h-6 rounded-full bg-orange-600 text-white flex items-center justify-center text-xs">3</span>
+                                <h5>Unggah Paket ZIP ke folder public_html</h5>
+                              </div>
+                              <p className="text-xs text-gray-600 leading-relaxed">
+                                Buka menu <strong>File Manager</strong> di cPanel:
+                              </p>
+                              <ul className="text-xs text-gray-700 space-y-1 list-disc pl-5">
+                                <li>Masuk ke direktori <strong>public_html</strong> (folder root website).</li>
+                                <li>Klik tombol <strong>Upload</strong> di toolbar atas File Manager.</li>
+                                <li>Pilih berkas <code>Web-Personal-Ust-Jaenal-cPanel-Hosting.zip</code> dan tunggu hingga progress 100% (berwarna hijau).</li>
+                              </ul>
+                            </div>
+                          )}
+
+                          {activeCpanelGuideStep === 4 && (
+                            <div className="space-y-2.5 animate-fadeIn">
+                              <div className="flex items-center gap-2 text-orange-950 font-bold text-sm">
+                                <span className="w-6 h-6 rounded-full bg-orange-600 text-white flex items-center justify-center text-xs">4</span>
+                                <h5>Ekstrak Berkas ZIP & Selesai</h5>
+                              </div>
+                              <p className="text-xs text-gray-600 leading-relaxed">
+                                Anda memiliki dua pilihan cara ekstrak:
+                              </p>
+                              <ul className="text-xs text-gray-700 space-y-1.5 list-disc pl-5">
+                                <li><strong>Pilihan A (File Manager cPanel):</strong> Klik kanan berkas ZIP di dalam <code>public_html</code>, lalu klik <strong>Extract</strong>.</li>
+                                <li><strong>Pilihan B (Auto-Unzipper):</strong> Buka browser dan buka <code>namadomain.com/unzip.php</code> lalu klik tombol Unzip.</li>
+                                <li>Buka file <code>db_config.php</code> melalui File Manager jika Anda perlu menyesuaikan username atau password MySQL. Website Anda kini live!</li>
+                              </ul>
+                            </div>
+                          )}
+                        </div>
+                      </div>
+
+                      {/* Package Files Manifest */}
+                      <div className="bg-white p-6 sm:p-7 rounded-3xl border-2 border-orange-200 shadow-md space-y-4">
+                        <div className="flex items-center justify-between border-b border-gray-100 pb-3">
+                          <h4 className="text-sm font-bold text-gray-900 flex items-center gap-2">
+                            <FileCode className="w-4 h-4 text-orange-600" />
+                            <span>Struktur Berkas di Dalam Paket ZIP cPanel</span>
+                          </h4>
+                          <span className="text-xs text-gray-500 font-mono">Lengkap & Terstruktur</span>
+                        </div>
+
+                        <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
+                          <div className="p-3 bg-orange-50/60 rounded-xl border border-orange-200 space-y-1">
+                            <div className="flex items-center gap-1.5 text-xs font-mono font-bold text-orange-950">
+                              <FileCode className="w-3.5 h-3.5 text-orange-600" />
+                              <span>index.php & .htaccess</span>
+                            </div>
+                            <p className="text-[10px] text-gray-600">Entry point web SPA cPanel + rewrite rule Apache & OpenGraph dynamic.</p>
+                          </div>
+
+                          <div className="p-3 bg-orange-50/60 rounded-xl border border-orange-200 space-y-1">
+                            <div className="flex items-center gap-1.5 text-xs font-mono font-bold text-orange-950">
+                              <FileCode className="w-3.5 h-3.5 text-orange-600" />
+                              <span>db_config.php</span>
+                            </div>
+                            <p className="text-[10px] text-gray-600">Koneksi PDO aman ke database MySQL dengan konfigurasi hosting cPanel.</p>
+                          </div>
+
+                          <div className="p-3 bg-amber-50 rounded-xl border border-amber-200 space-y-1">
+                            <div className="flex items-center gap-1.5 text-xs font-mono font-bold text-amber-950">
+                              <FileCode className="w-3.5 h-3.5 text-amber-700" />
+                              <span>unzip.php</span>
+                            </div>
+                            <p className="text-[10px] text-gray-600">Skrip auto-extractor 1-klik yang bisa dijalankan langsung di web browser.</p>
+                          </div>
+
+                          <div className="p-3 bg-orange-50/60 rounded-xl border border-orange-200 space-y-1">
+                            <div className="flex items-center gap-1.5 text-xs font-mono font-bold text-orange-950">
+                              <Database className="w-3.5 h-3.5 text-orange-600" />
+                              <span>database.sql</span>
+                            </div>
+                            <p className="text-[10px] text-gray-600">Skrip DDL & DML MySQL lengkap untuk profil, karya, agenda, dan logo.</p>
+                          </div>
+
+                          <div className="p-3 bg-orange-50/60 rounded-xl border border-orange-200 space-y-1">
+                            <div className="flex items-center gap-1.5 text-xs font-mono font-bold text-orange-950">
+                              <FileCode className="w-3.5 h-3.5 text-orange-600" />
+                              <span>api/ (PHP Endpoints)</span>
+                            </div>
+                            <p className="text-[10px] text-gray-600">Endpoint PHP: site-data.php, messages.php, settings.php, test_db.php.</p>
+                          </div>
+
+                          <div className="p-3 bg-orange-50/60 rounded-xl border border-orange-200 space-y-1">
+                            <div className="flex items-center gap-1.5 text-xs font-mono font-bold text-orange-950">
+                              <FileText className="w-3.5 h-3.5 text-orange-600" />
+                              <span>README_CPANEL.md</span>
+                            </div>
+                            <p className="text-[10px] text-gray-600">Petunjuk teknis lengkap deployment khusus server cPanel.</p>
                           </div>
                         </div>
                       </div>
