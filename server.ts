@@ -4281,6 +4281,8 @@ app.get('/api/backup/zip-data', async (req, res) => {
     const uploadsFolder = zip.folder('uploads');
     const scannedDirs = [UPLOADS_PUBLIC_DIR, UPLOADS_DATA_DIR, path.join(process.cwd(), 'public')];
     const addedFiles = new Set<string>();
+    const includeVideos = req.query.include_videos === '1' || req.query.include_videos === 'true';
+    const skippedLargeFiles: string[] = [];
 
     for (const uDir of scannedDirs) {
       if (uDir && fs.existsSync(uDir)) {
@@ -4288,11 +4290,19 @@ app.get('/api/backup/zip-data', async (req, res) => {
           const files = fs.readdirSync(uDir);
           for (const file of files) {
             const filePath = path.join(uDir, file);
-            if (fs.statSync(filePath).isFile()) {
+            const stat = fs.statSync(filePath);
+            if (stat.isFile()) {
               // For public root directory, only include media and document assets
               if (uDir === path.join(process.cwd(), 'public') && !file.match(/\.(jpg|jpeg|png|webp|svg|gif|ico|pdf)$/i)) {
                 continue;
               }
+              const ext = path.extname(file).toLowerCase().replace('.', '');
+              // Lewati berkas video besar (>15MB) agar cadangan ringan & bebas crash
+              if (!includeVideos && ['mp4', 'mov', 'avi', 'mkv', 'webm', 'zip', 'tar', 'gz'].includes(ext) && stat.size > 15 * 1024 * 1024) {
+                skippedLargeFiles.push(`${file} (${(stat.size / (1024 * 1024)).toFixed(2)} MB)`);
+                continue;
+              }
+
               if (!addedFiles.has(file)) {
                 addedFiles.add(file);
                 const fileContent = fs.readFileSync(filePath);
@@ -4307,16 +4317,23 @@ app.get('/api/backup/zip-data', async (req, res) => {
     }
 
     // 4. Instructions README
-    const readmeContent = `# CADANGAN DATA LENGKAP WEBSITE UST. JAENAL MASKUN, S.Pd.I.
+    let readmeContent = `# CADANGAN DATA LENGKAP WEBSITE UST. JAENAL MASKUN, S.Pd.I.
 Dibuat pada: ${new Date().toLocaleString('id-ID', { timeZone: 'Asia/Jakarta' })}
 
 Isi Berkas Cadangan Ini:
 1. data/persisted_site_data.json -> Seluruh profil, karya, agenda, pilar, galeri, pengaturan logo & footer.
 2. data/persisted_messages.json  -> Arsip seluruh pesan & undangan silaturahmi masuk.
 3. database.sql                  -> Skrip SQL database siap import langsung ke phpMyAdmin / MySQL.
-4. uploads/                      -> Semua berkas PDF materi kajian, foto flyer, avatar, dan banner.
+4. uploads/                      -> Semua berkas PDF materi kajian, foto flyer, avatar, dan banner.`;
 
-CARA PEMULIHAN (RESTORE):
+    if (skippedLargeFiles.length > 0) {
+      readmeContent += `\n\nCATATAN BERKAS BESAR:
+Berkas video berukuran besar berikut sengaja dikecualikan agar unduhan cepat dan hemat kuota:
+${skippedLargeFiles.map(f => `- ${f}`).join('\n')}
+Berkas video tetap tersimpan aman di direktori /uploads server Anda.`;
+    }
+
+    readmeContent += `\n\nCARA PEMULIHAN (RESTORE):
 - Buka Panel Admin -> Tab "Backup & Restore".
 - Pilih menu "Pulihkan dari Berkas Cadangan", lalu unggah berkas "persisted_site_data.json" dari dalam ZIP ini.
 - Atau impor file "database.sql" ke database MySQL hosting Anda melalui phpMyAdmin.
@@ -6366,6 +6383,9 @@ if (class_exists('ZipArchive')) {
         $sql .= "REPLACE INTO \`site_settings\` (\`setting_key\`, \`setting_value\`) VALUES ('site_data', '" . $escapedData . "');\\n";
         $zip->addFromString('database.sql', $sql);
 
+        // 3. Uploads directory (otomatis optimasi: lewati video besar >15MB agar unduhan cepat & hemat kuota)
+        $includeVideos = isset($_GET['include_videos']) && ($_GET['include_videos'] === '1' || $_GET['include_videos'] === 'true');
+        $skippedLarge = [];
         $uploadsDir = __DIR__ . '/../uploads';
         if (is_dir($uploadsDir)) {
             $files = scandir($uploadsDir);
@@ -6373,15 +6393,31 @@ if (class_exists('ZipArchive')) {
                 if ($file === '.' || $file === '..') continue;
                 $filePath = $uploadsDir . '/' . $file;
                 if (is_file($filePath)) {
+                    $fSize = @filesize($filePath);
+                    $ext = strtolower(pathinfo($file, PATHINFO_EXTENSION));
+                    // Jika berkas adalah video atau arsip > 15MB dan tidak meminta include_videos, lewati agar zip tetap ringkas (~1-3MB)
+                    if (!$includeVideos && in_array($ext, ['mp4', 'mov', 'avi', 'mkv', 'webm', 'zip', 'tar', 'gz', 'iso']) && $fSize > (15 * 1024 * 1024)) {
+                        $skippedLarge[] = $file . ' (' . round($fSize / (1024 * 1024), 2) . ' MB)';
+                        continue;
+                    }
                     $zip->addFile($filePath, 'uploads/' . $file);
                 }
             }
         }
 
+        // 4. README
         $readme = "PAKET CADANGAN KOMPLIT WEB UST. JAENAL MASKUN, S.Pd.I.\\n";
         $readme .= "Tanggal Ekspor: " . date('d-m-Y H:i:s') . "\\n";
         $readme .= "Format: Multi-Format Komplit (.ZIP berisi data JSON, skrip MySQL .SQL, dan berkas foto/media uploads/)\\n";
         $readme .= "Kompatibilitas: Android, iOS, Windows, Mac, Hosting Plesk, & cPanel.\\n";
+        if (!empty($skippedLarge)) {
+            $readme .= "\\nCATATAN FILE BESAR:\\n";
+            $readme .= "Berkas video berukuran besar berikut sengaja tidak dikemas ke dalam ZIP ini agar proses unduh cepat, hemat kuota HP, dan bebas crash:\\n";
+            foreach ($skippedLarge as $sk) {
+                $readme .= "- " . $sk . "\\n";
+            }
+            $readme .= "Berkas video di atas tetap tersimpan aman di direktori /uploads server Anda.\\n";
+        }
         $zip->addFromString('README_CADANGAN.txt', $readme);
 
         $zip->close();

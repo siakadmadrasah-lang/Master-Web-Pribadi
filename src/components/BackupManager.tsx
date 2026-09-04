@@ -1067,9 +1067,10 @@ export const BackupManager: React.FC<BackupManagerProps> = ({
       };
 
       zip.file('backup.json', JSON.stringify(backupBundle, null, 2));
-      zip.file('data/persisted_site_data.json', JSON.stringify({ siteContent: embeddedContent, logoConfig: embeddedLogo, stickyFooterConfig: embeddedFooter }, null, 2));
-      zip.file('data/site_content.json', JSON.stringify(embeddedContent, null, 2));
-      zip.file('database.sql', generateDatabaseSql(embeddedContent, embeddedLogo, embeddedFooter));
+      // Gunakan data bersih untuk file JSON & SQL agar ukuran berkas tidak membengkak ratusan megabita
+      zip.file('data/persisted_site_data.json', JSON.stringify({ siteContent: contentToBackup, logoConfig: logoToBackup, stickyFooterConfig: footerToBackup }, null, 2));
+      zip.file('data/site_content.json', JSON.stringify(contentToBackup, null, 2));
+      zip.file('database.sql', generateDatabaseSql(contentToBackup, logoToBackup, footerToBackup));
 
       // Pack physical media assets into uploads/
       const uploadsFolder = zip.folder('uploads');
@@ -1080,7 +1081,7 @@ export const BackupManager: React.FC<BackupManagerProps> = ({
         }
       }
 
-      zip.file('README_CADANGAN.txt', `PAKET CADANGAN LENGKAP WEB UST. JAENAL MASKUN\nTanggal Ekspor: ${new Date().toLocaleString('id-ID')}\nTotal Foto/Media Disematkan: ${inlinedMediaCount}\nKompatibilitas: Android, iPhone, Windows, Mac & Hosting cPanel/Plesk.`);
+      zip.file('README_CADANGAN.txt', `PAKET CADANGAN LENGKAP WEB UST. JAENAL MASKUN\nTanggal Ekspor: ${new Date().toLocaleString('id-ID')}\nTotal Foto/Media Disematkan: ${inlinedMediaCount}\nOptimasi: Berkas video besar (>15MB) dilewati agar hemat kuota & super cepat di HP.\nKompatibilitas: Android, iPhone, Windows, Mac & Hosting cPanel/Plesk.`);
 
       // Use fast STORE or low DEFLATE level to prevent high CPU/RAM spikes on phones
       const zipBlob = await zip.generateAsync({
@@ -1413,8 +1414,8 @@ export const BackupManager: React.FC<BackupManagerProps> = ({
                   </p>
                 </div>
                 <div className="p-3 bg-amber-50 rounded-xl border border-amber-200 text-[11px] text-amber-950 space-y-1">
-                  <span className="font-bold block">✓ Keunggulan:</span>
-                  <p>Menyertakan salinan fisik foto dan gambar sehingga dapat diekstrak atau dipulihkan di segala perangkat.</p>
+                  <span className="font-bold block">✓ Keunggulan & Optimasi Ringkas:</span>
+                  <p>Menyertakan salinan fisik seluruh foto, logo, dokumen & database SQL (~1-2 MB). Video raksasa (&gt;15MB) otomatis dilewati agar unduhan instan, hemat kuota HP, dan anti-crash.</p>
                 </div>
               </div>
 

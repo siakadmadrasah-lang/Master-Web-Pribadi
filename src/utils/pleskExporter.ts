@@ -1904,7 +1904,9 @@ if (class_exists('ZipArchive')) {
         $sql .= "REPLACE INTO \`site_settings\` (\`setting_key\`, \`setting_value\`) VALUES ('site_data', '" . $escapedData . "');\\n";
         $zip->addFromString('database.sql', $sql);
 
-        // 3. Uploads directory
+        // 3. Uploads directory (otomatis optimasi: lewati video besar >15MB agar unduhan cepat & hemat kuota)
+        $includeVideos = isset($_GET['include_videos']) && ($_GET['include_videos'] === '1' || $_GET['include_videos'] === 'true');
+        $skippedLarge = [];
         $uploadsDir = __DIR__ . '/../uploads';
         if (is_dir($uploadsDir)) {
             $files = scandir($uploadsDir);
@@ -1912,6 +1914,13 @@ if (class_exists('ZipArchive')) {
                 if ($file === '.' || $file === '..') continue;
                 $filePath = $uploadsDir . '/' . $file;
                 if (is_file($filePath)) {
+                    $fSize = @filesize($filePath);
+                    $ext = strtolower(pathinfo($file, PATHINFO_EXTENSION));
+                    // Jika berkas adalah video atau arsip > 15MB dan tidak meminta include_videos, lewati agar zip tetap ringkas (~1-3MB)
+                    if (!$includeVideos && in_array($ext, ['mp4', 'mov', 'avi', 'mkv', 'webm', 'zip', 'tar', 'gz', 'iso']) && $fSize > (15 * 1024 * 1024)) {
+                        $skippedLarge[] = $file . ' (' . round($fSize / (1024 * 1024), 2) . ' MB)';
+                        continue;
+                    }
                     $zip->addFile($filePath, 'uploads/' . $file);
                 }
             }
@@ -1922,6 +1931,14 @@ if (class_exists('ZipArchive')) {
         $readme .= "Tanggal Ekspor: " . date('d-m-Y H:i:s') . "\\n";
         $readme .= "Format: Multi-Format Komplit (.ZIP berisi data JSON, skrip MySQL .SQL, dan berkas foto/media uploads/)\\n";
         $readme .= "Kompatibilitas: Android, iOS, Windows, Mac, Hosting Plesk, & cPanel.\\n";
+        if (!empty($skippedLarge)) {
+            $readme .= "\\nCATATAN FILE BESAR:\\n";
+            $readme .= "Berkas video berukuran besar berikut sengaja tidak dikemas ke dalam ZIP ini agar proses unduh cepat, hemat kuota HP, dan bebas crash:\\n";
+            foreach ($skippedLarge as $sk) {
+                $readme .= "- " . $sk . "\\n";
+            }
+            $readme .= "Berkas video di atas tetap tersimpan aman di direktori /uploads server Anda.\\n";
+        }
         $zip->addFromString('README_CADANGAN.txt', $readme);
 
         $zip->close();
