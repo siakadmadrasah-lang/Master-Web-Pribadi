@@ -260,6 +260,7 @@ export const BackupManager: React.FC<BackupManagerProps> = ({
   const [isDraggingOver, setIsDraggingOver] = useState(false);
 
   // Export progress
+  const [includeBase64InJson, setIncludeBase64InJson] = useState(false);
   const [isDownloadingJson, setIsDownloadingJson] = useState(false);
   const [isDownloadingZip, setIsDownloadingZip] = useState(false);
   const [backupStatusText, setBackupStatusText] = useState<string | null>(null);
@@ -923,10 +924,15 @@ export const BackupManager: React.FC<BackupManagerProps> = ({
     }
   };
 
-  // Handler: Download JSON Backup (Instant, Self-Contained with Photos)
-  const handleDownloadJsonBackup = async () => {
+  // Handler: Download JSON Backup (Lightweight Pure Data or Optional Self-Contained with Photos)
+  const handleDownloadJsonBackup = async (forceEmbedPhotos?: boolean) => {
+    const shouldEmbed = typeof forceEmbedPhotos === 'boolean' ? forceEmbedPhotos : includeBase64InJson;
     setIsDownloadingJson(true);
-    setBackupStatusText('Menyematkan seluruh foto profil, galeri, dan media...');
+    setBackupStatusText(
+      shouldEmbed
+        ? 'Menyematkan seluruh foto profil, galeri, dan media ke Base64 (ukuran besar)...'
+        : 'Menyiapkan berkas cadangan JSON ringan (teks, artikel & pengaturan)...'
+    );
     try {
       let contentToBackup = siteContent;
       let logoToBackup = logoConfig;
@@ -951,13 +957,19 @@ export const BackupManager: React.FC<BackupManagerProps> = ({
         } catch (e) {}
       }
 
-      // Automatically embed all images as Base64 Data URLs so the JSON backup is 100% self-contained on Android
-      const {
-        siteContent: embeddedContent,
-        logoConfig: embeddedLogo,
-        stickyFooterConfig: embeddedFooter,
-        inlinedMediaCount
-      } = await embedMediaInSiteData(contentToBackup, logoToBackup, footerToBackup, (msg) => setBackupStatusText(msg));
+      let finalContent = contentToBackup;
+      let finalLogo = logoToBackup;
+      let finalFooter = footerToBackup;
+      let inlinedMediaCount = 0;
+
+      if (shouldEmbed) {
+        // Automatically embed all images as Base64 Data URLs only if user explicitly requested
+        const embedded = await embedMediaInSiteData(contentToBackup, logoToBackup, footerToBackup, (msg) => setBackupStatusText(msg));
+        finalContent = embedded.siteContent;
+        finalLogo = embedded.logoConfig;
+        finalFooter = embedded.stickyFooterConfig;
+        inlinedMediaCount = embedded.inlinedMediaCount;
+      }
 
       const backupObj = {
         version: '2.0',
@@ -965,21 +977,33 @@ export const BackupManager: React.FC<BackupManagerProps> = ({
         exportedAt: new Date().toISOString(),
         timestamp: Date.now(),
         data: {
-          siteContent: embeddedContent,
-          logoConfig: embeddedLogo,
-          stickyFooterConfig: embeddedFooter,
+          siteContent: finalContent,
+          logoConfig: finalLogo,
+          stickyFooterConfig: finalFooter,
           lastUpdated: Date.now()
         },
         meta: {
           embeddedMediaCount: inlinedMediaCount,
+          type: shouldEmbed ? 'standalone_base64' : 'lightweight_pure_data',
           compatibleWithAndroid: true
         }
       };
 
       const blob = new Blob([JSON.stringify(backupObj, null, 2)], { type: 'application/json' });
       const dateStr = new Date().toISOString().slice(0, 10);
-      downloadBlobSafely(blob, `backup-master-web-jaenalmaskun-${dateStr}.json`);
-      setRestoreSuccessMsg(`Cadangan JSON berhasil diunduh (${inlinedMediaCount} foto tersimpan mandiri)!`);
+      const fileName = shouldEmbed
+        ? `backup-master-web-jaenalmaskun-full-embedded-${dateStr}.json`
+        : `backup-master-web-jaenalmaskun-${dateStr}.json`;
+      downloadBlobSafely(blob, fileName);
+
+      const sizeKb = Math.round(blob.size / 1024);
+      const sizeDisplay = sizeKb > 1024 ? `${(sizeKb / 1024).toFixed(1)} MB` : `${sizeKb} KB`;
+
+      if (shouldEmbed) {
+        setRestoreSuccessMsg(`Cadangan JSON Mandiri berhasil diunduh (${sizeDisplay}, ${inlinedMediaCount} foto Base64 tersemat)!`);
+      } else {
+        setRestoreSuccessMsg(`Cadangan JSON Ringan berhasil diunduh (${sizeDisplay})! Murni teks, artikel, agenda, profil & tautan media (tanpa beban foto/video berat).`);
+      }
     } catch (e: any) {
       alert('Gagal mengunduh cadangan JSON: ' + (e?.message || 'Kesalahan browser'));
     } finally {
@@ -1218,12 +1242,12 @@ export const BackupManager: React.FC<BackupManagerProps> = ({
           </button>
           <button
             type="button"
-            onClick={handleDownloadJsonBackup}
+            onClick={() => handleDownloadJsonBackup(false)}
             disabled={isDownloadingJson}
             className="px-4 py-3 rounded-2xl bg-gradient-to-r from-amber-400 via-amber-300 to-amber-500 hover:from-amber-300 hover:to-amber-400 text-emerald-950 font-extrabold text-xs flex items-center justify-center gap-2 shadow-lg active:scale-95 transition-all cursor-pointer"
           >
             <Download className="w-4 h-4 shrink-0" />
-            <span>{isDownloadingJson ? 'Mengunduh...' : 'Cadangkan JSON (1-Klik)'}</span>
+            <span>{isDownloadingJson ? 'Mengunduh...' : 'Cadangkan JSON Ringan (1-Klik)'}</span>
           </button>
         </div>
       </div>
@@ -1370,28 +1394,52 @@ export const BackupManager: React.FC<BackupManagerProps> = ({
                 <div>
                   <div className="flex items-center gap-1.5 mb-1">
                     <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-emerald-100 text-emerald-900">
-                      Foto Tersemat (Android Ready)
+                      {includeBase64InJson ? 'Mode Base64 (~Ratusan MB)' : 'Ringan & Cepat (~50 KB)'}
                     </span>
                   </div>
-                  <h4 className="text-sm font-bold text-gray-900">1. Cadangan Berkas JSON (Mandiri & Foto)</h4>
+                  <h4 className="text-sm font-bold text-gray-900">1. Cadangan Berkas JSON</h4>
                   <p className="text-xs text-gray-600 mt-1 leading-relaxed">
-                    Menyimpan seluruh konfigurasi profil, karya, agenda, pilar, galeri, logo, serta menyematkan foto profil secara mandiri sehingga foto tetap tampil sempurna saat dipulihkan di HP Android maupun PC.
+                    Menyimpan seluruh teks profil, karya, agenda, pilar, struktur galeri, dan pengaturan website. Berukuran sangat kecil (~50 KB) dan unduhan selesai dalam 1 detik.
                   </p>
                 </div>
                 <div className="p-3 bg-emerald-50 rounded-xl border border-emerald-200 text-[11px] text-emerald-900 space-y-1">
-                  <span className="font-bold block">✓ Keunggulan:</span>
-                  <p>Ukuran efisien, foto profil & galeri otomatis disematkan, dan mudah dipulihkan langsung dari HP.</p>
+                  <span className="font-bold block">✓ Keunggulan JSON Ringan:</span>
+                  <p>Murni data teks dan struktur tanpa beban media. Sangat hemat memori dan 100% aman untuk HP Android tanpa risiko tab browser crash.</p>
+                </div>
+
+                {/* Checkbox toggle jika ingin menyematkan foto Base64 */}
+                <div className="pt-1">
+                  <label className="flex items-start gap-2.5 p-2.5 rounded-xl bg-gray-50 border border-gray-200 cursor-pointer hover:bg-gray-100 transition-colors">
+                    <input
+                      type="checkbox"
+                      checked={includeBase64InJson}
+                      onChange={(e) => setIncludeBase64InJson(e.target.checked)}
+                      className="mt-0.5 w-4 h-4 rounded text-emerald-700 focus:ring-emerald-600 cursor-pointer"
+                    />
+                    <div className="text-[11px] leading-snug">
+                      <span className="font-bold text-gray-800">Sematkan foto Base64 ke dalam JSON</span>
+                      <p className="text-[10px] text-gray-500 mt-0.5">
+                        Mengonversi seluruh foto menjadi teks Base64 di dalam JSON. Perhatian: Ukuran file akan membengkak hingga ratusan MB. (Disarankan tidak dicentang).
+                      </p>
+                    </div>
+                  </label>
                 </div>
               </div>
 
               <button
                 type="button"
-                onClick={handleDownloadJsonBackup}
+                onClick={() => handleDownloadJsonBackup()}
                 disabled={isDownloadingJson}
                 className="w-full py-3 px-4 rounded-xl bg-emerald-800 hover:bg-emerald-700 text-white text-xs font-bold flex items-center justify-center gap-2 shadow-md transition-all active:scale-98 disabled:opacity-60 cursor-pointer"
               >
                 <Download className={`w-4 h-4 text-amber-300 ${isDownloadingJson ? 'animate-bounce' : ''}`} />
-                <span>{isDownloadingJson ? 'Menyiapkan & Mengunduh JSON...' : 'Unduh JSON Cadangan'}</span>
+                <span>
+                  {isDownloadingJson
+                    ? 'Menyiapkan & Mengunduh JSON...'
+                    : includeBase64InJson
+                    ? 'Unduh JSON (+ Sematan Foto Base64)'
+                    : 'Unduh JSON Ringan (~50 KB)'}
+                </span>
               </button>
             </div>
 
