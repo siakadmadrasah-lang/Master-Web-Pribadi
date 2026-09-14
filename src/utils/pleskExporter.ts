@@ -2838,12 +2838,21 @@ export const downloadPleskPackageZip = async (
   footerConfig?: StickyFooterConfig,
   onProgress?: (percent: number, message: string) => void
 ): Promise<Blob> => {
-  // Attempt server fetch with timeout, safely fallback to client generation
-  if (onProgress) onProgress(30, 'Menyiapkan paket ZIP Plesk...');
+  // Attempt server fetch with adequate timeout, safely fallback to client generation
+  if (onProgress) onProgress(30, 'Menyiapkan paket ZIP Plesk dari server...');
   try {
     const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), 3500);
-    const response = await fetch('/api/export-plesk-zip', { signal: controller.signal });
+    const timer = setTimeout(() => controller.abort(), 60000);
+    const response = await fetch('/api/export-plesk-zip', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        siteContent,
+        logoConfig,
+        stickyFooterConfig: footerConfig
+      }),
+      signal: controller.signal
+    });
     clearTimeout(timer);
     if (response.ok) {
       const contentType = response.headers.get('content-type') || '';

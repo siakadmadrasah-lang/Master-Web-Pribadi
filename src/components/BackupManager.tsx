@@ -270,6 +270,62 @@ export const BackupManager: React.FC<BackupManagerProps> = ({
   const [isExportingPlesk, setIsExportingPlesk] = useState(false);
   const [pleskProgress, setPleskProgress] = useState<{ percent: number; message: string } | null>(null);
 
+  // Media storage stats & orphan cleanup state
+  const [mediaStats, setMediaStats] = useState<{
+    totalFiles: number;
+    totalBytes: number;
+    activeCount: number;
+    activeBytes: number;
+    orphanCount: number;
+    orphanBytes: number;
+    activeFiles: any[];
+    orphanFiles: any[];
+  } | null>(null);
+  const [isLoadingMediaStats, setIsLoadingMediaStats] = useState<boolean>(false);
+  const [isCleaningMedia, setIsCleaningMedia] = useState<boolean>(false);
+  const [mediaCleanResultMsg, setMediaCleanResultMsg] = useState<string | null>(null);
+
+  const fetchMediaStats = async () => {
+    setIsLoadingMediaStats(true);
+    try {
+      const res = await fetch(`/api/media/stats?_t=${Date.now()}`);
+      if (res.ok) {
+        const data = await res.json();
+        if (data.success) {
+          setMediaStats(data);
+        }
+      }
+    } catch (e) {
+      console.warn('Failed to fetch media stats:', e);
+    } finally {
+      setIsLoadingMediaStats(false);
+    }
+  };
+
+  const handleCleanupOrphans = async () => {
+    if (isCleaningMedia) return;
+    setIsCleaningMedia(true);
+    setMediaCleanResultMsg(null);
+    try {
+      const res = await fetch('/api/media/cleanup-orphans', { method: 'POST' });
+      const data = await res.json();
+      if (data.success) {
+        setMediaCleanResultMsg(data.message);
+        await fetchMediaStats();
+      } else {
+        alert(data.error || 'Gagal membersihkan media');
+      }
+    } catch (e: any) {
+      alert('Gagal membersihkan berkas media: ' + (e.message || 'Kesalahan jaringan'));
+    } finally {
+      setIsCleaningMedia(false);
+    }
+  };
+
+  useEffect(() => {
+    fetchMediaStats();
+  }, []);
+
   // Live Stats from current props
   const currentLiveStats: BackupStats = {
     publicationsCount: siteContent?.publications?.length || 0,
@@ -1125,9 +1181,39 @@ export const BackupManager: React.FC<BackupManagerProps> = ({
 
     // 1. Prioritas Utama: Unduh via Server API (/api/backup/zip-data) dengan fetch Blob
     try {
+      let contentToBackup = siteContent;
+      let logoToBackup = logoConfig;
+      let footerToBackup = stickyFooterConfig;
+
+      if (!contentToBackup) {
+        try {
+          const raw = localStorage.getItem('madrasah_site_content_config');
+          if (raw) contentToBackup = JSON.parse(raw);
+        } catch (e) {}
+      }
+      if (!logoToBackup) {
+        try {
+          const raw = localStorage.getItem('madrasah_custom_header_logo');
+          if (raw) logoToBackup = JSON.parse(raw);
+        } catch (e) {}
+      }
+      if (!footerToBackup) {
+        try {
+          const raw = localStorage.getItem('madrasah_sticky_footer_config');
+          if (raw) footerToBackup = JSON.parse(raw);
+        } catch (e) {}
+      }
+
       const controller = new AbortController();
-      const timer = setTimeout(() => controller.abort(), 45000);
+      const timer = setTimeout(() => controller.abort(), 60000);
       const res = await fetch(`/api/backup/zip-data?_t=${Date.now()}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          siteContent: contentToBackup,
+          logoConfig: logoToBackup,
+          stickyFooterConfig: footerToBackup
+        }),
         signal: controller.signal
       });
       clearTimeout(timer);
@@ -1137,9 +1223,11 @@ export const BackupManager: React.FC<BackupManagerProps> = ({
         const blob = await res.blob();
         if (blob && blob.size > 200) {
           downloadBlobSafely(blob, backupFileName);
-          setRestoreSuccessMsg('Paket cadangan komplit 100% berhasil diunduh! Seluruh file website, database, logo, galeri foto, video & dokumen tersimpan lengkap.');
+          const sizeMb = (blob.size / (1024 * 1024)).toFixed(2);
+          setRestoreSuccessMsg(`Paket cadangan komplit (${sizeMb} MB) berhasil diunduh! Seluruh video & media yang sudah dihapus otomatis disaring sehingga ukuran unduhan kini optimal.`);
           setIsDownloadingZip(false);
           setBackupStatusText(null);
+          fetchMediaStats();
           return;
         }
       }
@@ -1588,8 +1676,59 @@ export const BackupManager: React.FC<BackupManagerProps> = ({
                   </p>
                 </div>
                 <div className="p-3 bg-amber-50 rounded-xl border border-amber-200 text-[11px] text-amber-950 space-y-1">
-                  <span className="font-bold block">✓ Cadangan Normal 100% Utuh:</span>
-                  <p>Membackup seluruh isi website tanpa ada yang tertinggal: logo header/footer, seluruh foto &amp; video galeri, avatar, banner, dokumen kajian, serta skrip migrasi MySQL.</p>
+                  <span className="font-bold block text-emerald-950">✓ Cadangan Normal 100% Utuh:</span>
+                  <p>Membackup seluruh isi website: logo header/footer, seluruh foto &amp; video galeri aktif, avatar, banner, dokumen kajian, serta skrip migrasi MySQL.</p>
+                </div>
+
+                {/* Media Sync & Clean Status Widget */}
+                <div className="p-3 bg-amber-50/70 rounded-2xl border border-amber-200/80 text-[11px] text-amber-950 space-y-2">
+                  <div className="flex items-center justify-between">
+                    <span className="font-bold flex items-center gap-1.5 text-emerald-900">
+                      <Sparkles className="w-3.5 h-3.5 text-amber-600" />
+                      Sinkronisasi Ukuran Otomatis
+                    </span>
+                    <button
+                      type="button"
+                      onClick={fetchMediaStats}
+                      disabled={isLoadingMediaStats}
+                      className="text-[10px] text-emerald-800 hover:text-emerald-950 font-semibold underline cursor-pointer"
+                    >
+                      {isLoadingMediaStats ? 'Memeriksa...' : 'Perbarui Status'}
+                    </button>
+                  </div>
+                  <p className="text-gray-600 text-[11px] leading-relaxed">
+                    Video &amp; media yang sudah dihapus dari website otomatis disaring sehingga ukuran paket unduhan ZIP langsung mengecil secara akurat.
+                  </p>
+                  {mediaStats && (
+                    <div className="pt-1.5 border-t border-amber-200/60 space-y-1.5">
+                      <div className="flex justify-between text-[11px]">
+                        <span className="text-gray-600">Media Aktif Terhubung:</span>
+                        <span className="font-bold text-emerald-900">{mediaStats.activeCount} berkas ({(mediaStats.activeBytes / (1024 * 1024)).toFixed(1)} MB)</span>
+                      </div>
+                      <div className="flex justify-between text-[11px]">
+                        <span className="text-gray-600">Berkas Yatim (Bekas Terhapus):</span>
+                        <span className={`font-bold ${mediaStats.orphanCount > 0 ? 'text-amber-700' : 'text-gray-500'}`}>
+                          {mediaStats.orphanCount} berkas ({(mediaStats.orphanBytes / 1024).toFixed(1)} KB)
+                        </span>
+                      </div>
+                      {mediaStats.orphanCount > 0 && (
+                        <button
+                          type="button"
+                          onClick={handleCleanupOrphans}
+                          disabled={isCleaningMedia}
+                          className="mt-1 w-full py-1.5 px-2.5 rounded-lg bg-amber-200 hover:bg-amber-300 text-amber-950 font-bold text-[10px] flex items-center justify-center gap-1.5 transition-all cursor-pointer"
+                        >
+                          <Trash2 className="w-3 h-3 text-amber-900" />
+                          <span>{isCleaningMedia ? 'Membersihkan...' : `Bersihkan ${mediaStats.orphanCount} Berkas Yatim di Server`}</span>
+                        </button>
+                      )}
+                    </div>
+                  )}
+                  {mediaCleanResultMsg && (
+                    <div className="text-[10px] text-emerald-800 font-bold bg-emerald-100/70 p-1.5 rounded-lg">
+                      ✓ {mediaCleanResultMsg}
+                    </div>
+                  )}
                 </div>
               </div>
 
@@ -2068,6 +2207,83 @@ export const BackupManager: React.FC<BackupManagerProps> = ({
                 <FileSpreadsheet className="w-4 h-4 text-amber-300 inline" />
                 <span>Unduh Tabel CSV Pesan Masuk</span>
               </a>
+            </div>
+
+            {/* Storage Audit & Orphan Cleanup */}
+            <div className="bg-white p-6 rounded-3xl border-2 border-indigo-200 shadow-sm flex flex-col justify-between space-y-4 md:col-span-2">
+              <div className="space-y-3">
+                <div className="flex items-center justify-between">
+                  <div className="w-12 h-12 rounded-2xl bg-indigo-100 text-indigo-900 flex items-center justify-center font-bold">
+                    <Sparkles className="w-6 h-6 text-indigo-700" />
+                  </div>
+                  <button
+                    type="button"
+                    onClick={fetchMediaStats}
+                    disabled={isLoadingMediaStats}
+                    className="px-3 py-1.5 rounded-xl bg-indigo-50 hover:bg-indigo-100 text-indigo-900 text-xs font-bold flex items-center gap-1.5 transition-all cursor-pointer"
+                  >
+                    <RefreshCw className={`w-3.5 h-3.5 ${isLoadingMediaStats ? 'animate-spin' : ''}`} />
+                    <span>Periksa Status Media</span>
+                  </button>
+                </div>
+                <div>
+                  <h4 className="text-sm font-bold text-gray-900">3. Audit Ukuran Penyimpanan &amp; Sinkronisasi Unduhan ZIP</h4>
+                  <p className="text-xs text-gray-600 mt-1 leading-relaxed">
+                    Sistem secara otomatis mengecualikan video atau foto yang sudah dihapus dari paket ZIP. Anda juga dapat menghapus berkas yatim secara permanen dari disk server agar kapasitas hosting tetap lega.
+                  </p>
+                </div>
+
+                {mediaStats ? (
+                  <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 pt-2">
+                    <div className="p-3 bg-indigo-50/70 rounded-2xl border border-indigo-100">
+                      <span className="text-[10px] text-gray-500 font-bold uppercase block">Total Berkas di Disk</span>
+                      <p className="text-base font-black text-indigo-950 mt-0.5">
+                        {mediaStats.totalFiles} berkas ({(mediaStats.totalBytes / (1024 * 1024)).toFixed(1)} MB)
+                      </p>
+                    </div>
+
+                    <div className="p-3 bg-emerald-50/70 rounded-2xl border border-emerald-100">
+                      <span className="text-[10px] text-emerald-800 font-bold uppercase block">Media Aktif di Website</span>
+                      <p className="text-base font-black text-emerald-950 mt-0.5">
+                        {mediaStats.activeCount} berkas ({(mediaStats.activeBytes / (1024 * 1024)).toFixed(1)} MB)
+                      </p>
+                    </div>
+
+                    <div className={`p-3 rounded-2xl border ${mediaStats.orphanCount > 0 ? 'bg-amber-50/90 border-amber-200' : 'bg-gray-50 border-gray-200'}`}>
+                      <span className="text-[10px] text-gray-600 font-bold uppercase block">Berkas Bekas / Terhapus</span>
+                      <p className={`text-base font-black mt-0.5 ${mediaStats.orphanCount > 0 ? 'text-amber-900' : 'text-gray-600'}`}>
+                        {mediaStats.orphanCount} berkas ({(mediaStats.orphanBytes / 1024).toFixed(1)} KB)
+                      </p>
+                    </div>
+                  </div>
+                ) : (
+                  <div className="text-xs text-gray-500 py-2">Memuat ringkasan media...</div>
+                )}
+
+                {mediaCleanResultMsg && (
+                  <div className="p-3 rounded-xl bg-emerald-50 border border-emerald-200 text-xs font-bold text-emerald-900 flex items-center gap-2">
+                    <CheckCircle2 className="w-4 h-4 text-emerald-700 shrink-0" />
+                    <span>{mediaCleanResultMsg}</span>
+                  </div>
+                )}
+              </div>
+
+              {mediaStats && mediaStats.orphanCount > 0 ? (
+                <button
+                  type="button"
+                  onClick={handleCleanupOrphans}
+                  disabled={isCleaningMedia}
+                  className="w-full py-3 px-4 rounded-xl bg-amber-500 hover:bg-amber-400 text-emerald-950 text-xs font-bold flex items-center justify-center gap-2 shadow-sm transition-all cursor-pointer"
+                >
+                  <Trash2 className="w-4 h-4 text-amber-950" />
+                  <span>{isCleaningMedia ? 'Sedang membersihkan disk server...' : `Bersihkan ${mediaStats.orphanCount} Berkas Yatim & Bebaskan Ruang Hosting`}</span>
+                </button>
+              ) : (
+                <div className="p-3 bg-emerald-50/80 rounded-xl border border-emerald-200 text-emerald-900 text-xs font-semibold flex items-center gap-2">
+                  <CheckCircle2 className="w-4 h-4 text-emerald-700 shrink-0" />
+                  <span>Penyimpanan bersih optimal! Seluruh berkas di server selaras dengan konten website yang aktif.</span>
+                </div>
+              )}
             </div>
           </div>
         </div>

@@ -4401,15 +4401,220 @@ app.get('/api/backup/export-messages-csv', async (req, res) => {
   }
 });
 
+// Helper to identify media files that are actively referenced in site data
+function getReferencedMediaSet(siteData: any): Set<string> {
+  const referenced = new Set<string>();
+  if (!siteData) return referenced;
+
+  // Standard web assets and icons that should always be preserved
+  const standardIcons = [
+    'favicon.ico', 'favicon.png', 'apple-touch-icon.png', 'apple-touch-icon-precomposed.png',
+    'og-image.jpg', 'og-preview.jpg', 'thumbnail.jpg'
+  ];
+  for (const ic of standardIcons) {
+    referenced.add(ic);
+  }
+
+  const raw = JSON.stringify(siteData);
+  // Match URLs with /uploads/ or uploads/
+  const regex = /(?:\/uploads\/|uploads\/)([a-zA-Z0-9_\-\.]+)/g;
+  let m;
+  while ((m = regex.exec(raw)) !== null) {
+    if (m[1]) referenced.add(m[1].trim());
+  }
+
+  // Also check all physical files in uploads directories against raw JSON text
+  const candidateDirs = [UPLOADS_DATA_DIR, UPLOADS_PUBLIC_DIR];
+  for (const dir of candidateDirs) {
+    if (dir && fs.existsSync(dir)) {
+      try {
+        const files = fs.readdirSync(dir);
+        for (const file of files) {
+          if (raw.includes(file)) {
+            referenced.add(file);
+          }
+        }
+      } catch (e) {}
+    }
+  }
+
+  return referenced;
+}
+
+// Media Stats Endpoint: scan active vs orphan media files (especially deleted videos and old images)
+app.get('/api/media/stats', (req, res) => {
+  try {
+    const currentData = cachedSiteData || loadSiteDataFromFile();
+    const activeMediaFiles = getReferencedMediaSet(currentData);
+
+    const scannedDirs = [UPLOADS_DATA_DIR, UPLOADS_PUBLIC_DIR].filter(d => d && fs.existsSync(d));
+    const processedFiles = new Map<string, { size: number; path: string }>();
+
+    for (const dir of scannedDirs) {
+      try {
+        const files = fs.readdirSync(dir);
+        for (const f of files) {
+          const fp = path.join(dir, f);
+          const stat = fs.statSync(fp);
+          if (stat.isFile() && !processedFiles.has(f)) {
+            processedFiles.set(f, { size: stat.size, path: fp });
+          }
+        }
+      } catch (e) {}
+    }
+
+    let totalBytes = 0;
+    let activeBytes = 0;
+    let orphanBytes = 0;
+    const activeFilesList: any[] = [];
+    const orphanFilesList: any[] = [];
+
+    const getFileType = (name: string): string => {
+      const ext = path.extname(name).toLowerCase();
+      if (['.mp4', '.webm', '.mov', '.mkv', '.avi'].includes(ext)) return 'video';
+      if (['.jpg', '.jpeg', '.png', '.webp', '.gif', '.svg', '.ico'].includes(ext)) return 'image';
+      if (['.pdf', '.doc', '.docx', '.zip'].includes(ext)) return 'document';
+      return 'other';
+    };
+
+    for (const [name, info] of processedFiles.entries()) {
+      totalBytes += info.size;
+      const type = getFileType(name);
+      const isRef = activeMediaFiles.has(name);
+      const item = {
+        name,
+        size: info.size,
+        type,
+        isReferenced: isRef
+      };
+
+      if (isRef) {
+        activeBytes += info.size;
+        activeFilesList.push(item);
+      } else {
+        orphanBytes += info.size;
+        orphanFilesList.push(item);
+      }
+    }
+
+    res.json({
+      success: true,
+      totalFiles: processedFiles.size,
+      totalBytes,
+      activeCount: activeFilesList.length,
+      activeBytes,
+      orphanCount: orphanFilesList.length,
+      orphanBytes,
+      activeFiles: activeFilesList,
+      orphanFiles: orphanFilesList
+    });
+  } catch (err: any) {
+    res.status(500).json({ success: false, error: err.message || 'Gagal memindai status media' });
+  }
+});
+
+// Media Cleanup Endpoint: purge orphaned/deleted files to permanently reduce disk & zip download size
+app.post('/api/media/cleanup-orphans', (req, res) => {
+  try {
+    const currentData = cachedSiteData || loadSiteDataFromFile();
+    const activeMediaFiles = getReferencedMediaSet(currentData);
+
+    const targetDirs = [
+      UPLOADS_DATA_DIR,
+      UPLOADS_PUBLIC_DIR,
+      path.join(process.cwd(), 'dist', 'uploads'),
+      path.join(process.cwd(), 'dist', 'assets', 'uploads')
+    ].filter(d => d && fs.existsSync(d));
+
+    const deletedFiles: string[] = [];
+    let freedBytes = 0;
+    const visited = new Set<string>();
+
+    for (const dir of targetDirs) {
+      try {
+        const files = fs.readdirSync(dir);
+        for (const f of files) {
+          const fp = path.join(dir, f);
+          const stat = fs.statSync(fp);
+          if (stat.isFile() && !activeMediaFiles.has(f)) {
+            const size = stat.size;
+            fs.unlinkSync(fp);
+            if (!visited.has(f)) {
+              visited.add(f);
+              deletedFiles.push(f);
+              freedBytes += size;
+            }
+          }
+        }
+      } catch (e) {}
+    }
+
+    const formatBytes = (bytes: number) => {
+      if (bytes < 1024) return `${bytes} B`;
+      if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+      return `${(bytes / (1024 * 1024)).toFixed(2)} MB`;
+    };
+
+    res.json({
+      success: true,
+      deletedCount: deletedFiles.length,
+      deletedFiles,
+      freedBytes,
+      freedFormatted: formatBytes(freedBytes),
+      message: deletedFiles.length > 0
+        ? `Berhasil membersihkan ${deletedFiles.length} berkas media/video yang tidak lagi terpakai dan menghemat ${formatBytes(freedBytes)} ruang unduhan!`
+        : 'Seluruh berkas media sudah bersih dan terpakai aktif. Tidak ada file yatim/sampah yang perlu dihapus.'
+    });
+  } catch (err: any) {
+    res.status(500).json({ success: false, error: err.message || 'Gagal membersihkan berkas media yatim' });
+  }
+});
+
+// Single file deletion endpoint (e.g. when video or image is explicitly removed in editor)
+app.post('/api/media/delete-file', (req, res) => {
+  try {
+    const filename = req.body?.filename;
+    if (!filename || typeof filename !== 'string' || filename.includes('..') || filename.includes('/') || filename.includes('\\')) {
+      return res.status(400).json({ success: false, error: 'Nama berkas tidak valid' });
+    }
+
+    const targetDirs = [
+      UPLOADS_DATA_DIR,
+      UPLOADS_PUBLIC_DIR,
+      path.join(process.cwd(), 'dist', 'uploads'),
+      path.join(process.cwd(), 'dist', 'assets', 'uploads')
+    ].filter(d => d && fs.existsSync(d));
+
+    let deleted = false;
+    for (const dir of targetDirs) {
+      const fp = path.join(dir, filename);
+      if (fs.existsSync(fp)) {
+        try {
+          fs.unlinkSync(fp);
+          deleted = true;
+        } catch (e) {}
+      }
+    }
+
+    res.json({ success: true, deleted, filename });
+  } catch (err: any) {
+    res.status(500).json({ success: false, error: err.message || 'Gagal menghapus berkas media' });
+  }
+});
+
 // 8. Export Full Website Data & Uploads ZIP Endpoint
 app.head('/api/backup/zip-data', (req, res) => {
   res.setHeader('Content-Type', 'application/zip');
   res.status(200).end();
 });
 
-app.get('/api/backup/zip-data', async (req, res) => {
+const handleZipDataExport = async (req: any, res: any) => {
   try {
-    const currentData = cachedSiteData || loadSiteDataFromFile();
+    const incoming = req.body;
+    const currentData = (incoming && (incoming.siteContent || incoming.profile))
+      ? incoming
+      : (cachedSiteData || loadSiteDataFromFile());
+
     const msgs = await loadMessages();
     const zip = new JSZip();
 
@@ -4428,7 +4633,11 @@ app.get('/api/backup/zip-data', async (req, res) => {
     // 2. MySQL Dump SQL
     zip.file('database.sql', generateSqlContent(currentData));
 
-    // 3. Uploads & Media directory (logo, foto profil, seluruh galeri, video, flyer, pdf, dokumen)
+    // 3. Uploads & Media directory - Smart filtering to only include active media
+    // If a user reduced or deleted videos, the ZIP size will now decrease immediately!
+    const onlyActive = req.query.includeAll !== '1' && req.query.includeAll !== 'true' && req.body?.includeAll !== true;
+    const activeMediaFiles = getReferencedMediaSet(currentData);
+
     const uploadsFolder = zip.folder('uploads');
     const scannedDirs = [UPLOADS_PUBLIC_DIR, UPLOADS_DATA_DIR, path.join(process.cwd(), 'public')];
     const addedFiles = new Set<string>();
@@ -4443,6 +4652,11 @@ app.get('/api/backup/zip-data', async (req, res) => {
             if (stat.isFile()) {
               // For public root directory, only include media and document assets
               if (uDir === path.join(process.cwd(), 'public') && !file.match(/\.(jpg|jpeg|png|webp|svg|gif|ico|pdf|mp4|webm)$/i)) {
+                continue;
+              }
+
+              // Smart filtering: exclude orphaned/deleted files unless requested
+              if (onlyActive && !activeMediaFiles.has(file)) {
                 continue;
               }
 
@@ -4463,11 +4677,12 @@ app.get('/api/backup/zip-data', async (req, res) => {
     const readmeContent = `# CADANGAN DATA LENGKAP WEBSITE UST. JAENAL MASKUN, S.Pd.I.
 Dibuat pada: ${new Date().toLocaleString('id-ID', { timeZone: 'Asia/Jakarta' })}
 
-Isi Berkas Cadangan Ini (100% Komplit):
-1. data/persisted_site_data.json -> Seluruh profil, karya, agenda, pilar, galeri foto & video, pengaturan logo & footer.
+Isi Berkas Cadangan Ini (100% Bersih & Sinkron):
+1. data/persisted_site_data.json -> Seluruh profil, karya, agenda, pilar, galeri foto & video, pengaturan logo & footer aktif.
 2. data/persisted_messages.json  -> Arsip seluruh pesan & undangan silaturahmi masuk.
 3. database.sql                  -> Skrip SQL database siap import langsung ke phpMyAdmin / MySQL.
-4. uploads/                      -> Semua berkas fisik logo, foto galeri, video galeri, avatar, flyer, dan dokumen PDF.
+4. uploads/                      -> Semua berkas fisik logo, foto galeri, video galeri, avatar, flyer, dan dokumen PDF yang aktif digunakan.
+* Sistem Cerdas: Berkas video/media yang sudah Anda hapus dari website otomatis disaring sehingga ukuran unduhan ZIP tidak membengkak!
 
 CARA PEMULIHAN (RESTORE):
 - Buka Panel Admin -> Tab "Backup & Restore".
@@ -4493,7 +4708,10 @@ CARA PEMULIHAN (RESTORE):
     console.error('Error generating data backup zip:', err);
     res.status(500).json({ success: false, error: err.message || 'Gagal mengompres cadangan data' });
   }
-});
+};
+
+app.get('/api/backup/zip-data', handleZipDataExport);
+app.post('/api/backup/zip-data', handleZipDataExport);
 
 // Reset data
 app.post('/api/reset-data', async (req, res) => {
@@ -4763,7 +4981,8 @@ DirectoryIndex index.php index.html
 
 <IfModule mod_rewrite.c>
     RewriteEngine On
-    RewriteBase /
+    # RewriteBase dinamis: mendukung instalasi di root public_html maupun di subfolder/folder luar
+    # RewriteBase /
 
     # Cegah akses langsung ke file sensitif
     RewriteRule ^(db_config\\.php|db_config\\.local\\.php|database\\.sql|\\.git|\\.env|package\\.json|server\\.ts) - [F,L,NC]
@@ -5794,6 +6013,352 @@ Website kini 100% siap digunakan dan seluruh data tersimpan permanen di database
 `;
 }
 
+function generateCpanelBridgeHtml() {
+  return `<!DOCTYPE html>
+<html lang="id">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Website Resmi Ust. Jaenal Maskun, S.Pd.I.</title>
+  <!-- 
+    JEMBATAN PENGARAH OTOMATIS (AUTO-BRIDGE REDIRECT)
+    Letakkan berkas ini sebagai public_html/index.html jika berkas website utama
+    diletakkan di dalam subfolder (misal: public_html/web/) atau folder kustom lainnya.
+  -->
+  <script>
+    (function() {
+      var currentPath = window.location.pathname;
+      var params = new URLSearchParams(window.location.search);
+      var targetFolder = params.get('folder') || 'web';
+      
+      // Cegah looping jika sudah berada di folder target
+      if (currentPath.indexOf('/' + targetFolder) === 0) return;
+      
+      var search = window.location.search ? window.location.search : '';
+      var hash = window.location.hash ? window.location.hash : '';
+      var targetUrl = '/' + targetFolder + '/' + search + hash;
+      
+      // Auto-redirect instan
+      window.location.replace(targetUrl);
+    })();
+  </script>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+      background: linear-gradient(135deg, #064e3b 0%, #022c22 100%);
+      color: #fef3c7;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      min-height: 100vh;
+      padding: 24px;
+      text-align: center;
+    }
+    .card {
+      background: rgba(255, 255, 255, 0.07);
+      border: 1px solid rgba(251, 191, 36, 0.35);
+      border-radius: 24px;
+      padding: 36px 28px;
+      max-width: 480px;
+      width: 100%;
+      box-shadow: 0 25px 50px -12px rgba(0, 0, 0, 0.5);
+      backdrop-filter: blur(12px);
+    }
+    .icon {
+      width: 54px;
+      height: 54px;
+      background: rgba(245, 158, 11, 0.2);
+      border: 1px solid #f59e0b;
+      border-radius: 16px;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      margin-bottom: 20px;
+      color: #fbbf24;
+      font-size: 24px;
+    }
+    h1 { font-size: 1.25rem; font-weight: 800; color: #fde68a; margin-bottom: 12px; }
+    p { font-size: 0.92rem; color: #cbd5e1; line-height: 1.6; margin-bottom: 24px; }
+    a.btn {
+      display: inline-block;
+      width: 100%;
+      padding: 13px 24px;
+      background: linear-gradient(to right, #f59e0b, #d97706);
+      color: #022c22;
+      font-weight: 800;
+      font-size: 0.95rem;
+      border-radius: 14px;
+      text-decoration: none;
+      transition: all 0.2s ease;
+      box-shadow: 0 4px 14px rgba(245, 158, 11, 0.3);
+    }
+    a.btn:hover { background: linear-gradient(to right, #fbbf24, #f59e0b); transform: translateY(-1px); }
+  </style>
+</head>
+<body>
+  <div class="card">
+    <div class="icon">🌿</div>
+    <h1>Menghubungkan ke Website Resmi...</h1>
+    <p>Sedang memuat portal Ust. Jaenal Maskun, S.Pd.I. Jika halaman tidak beralih otomatis dalam 3 detik, silakan klik tombol di bawah ini:</p>
+    <a id="targetBtn" class="btn" href="./web/">Buka Website Sekarang &rarr;</a>
+  </div>
+  <script>
+    var params = new URLSearchParams(window.location.search);
+    var target = params.get('folder') || 'web';
+    var btn = document.getElementById('targetBtn');
+    if (btn) btn.href = './' + target + '/';
+  </script>
+</body>
+</html>
+`;
+}
+
+function generateCpanelSymlinkMakerPhp() {
+  return `<?php
+/**
+ * Utilitas Otomatis Pembuat Tautan Simbolik (Symlink) cPanel
+ * Web Personal Ust. Jaenal Maskun, S.Pd.I.
+ * 
+ * FUNGSI:
+ * Memungkinkan berkas website yang diletakkan di folder di LUAR public_html
+ * (misal: /home/username/web_pribadi/) dapat diakses publik melalui https://domain.com/web
+ */
+@ini_set('display_errors', '1');
+error_reporting(E_ALL);
+
+$docRoot = rtrim($_SERVER['DOCUMENT_ROOT'] ?? __DIR__, '/');
+$homeDir = dirname($docRoot);
+
+$defaultTarget = $homeDir . '/web_pribadi';
+$defaultLink = 'web';
+
+$msg = '';
+$status = 'info';
+
+if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['action'] === 'create_symlink') {
+    $targetPath = trim($_POST['target_path'] ?? $defaultTarget);
+    $linkName = trim($_POST['link_name'] ?? $defaultLink);
+    $destLink = $docRoot . '/' . ltrim($linkName, '/');
+
+    if (!file_exists($targetPath)) {
+        $msg = "Folder target tidak ditemukan di: <strong>" . htmlspecialchars($targetPath) . "</strong>. Pastikan Anda sudah membuat atau mengekstrak folder tersebut di File Manager cPanel.";
+        $status = 'error';
+    } elseif (file_exists($destLink) || is_link($destLink)) {
+        $msg = "Tautan simbolik atau folder <strong>" . htmlspecialchars($linkName) . "</strong> sudah ada di public_html. Silakan hapus atau ganti nama tautan jika ingin membuat ulang.";
+        $status = 'warning';
+    } else {
+        if (@symlink($targetPath, $destLink)) {
+            $msg = "Alhamdulillah! Tautan simbolik berhasil dibuat. Folder luar Anda kini dapat langsung diakses oleh publik di: <br><a href='/" . htmlspecialchars($linkName) . "/' target='_blank' style='color:#fde68a;font-weight:bold;text-decoration:underline;'>https://" . ($_SERVER['HTTP_HOST'] ?? 'domain.com') . "/" . htmlspecialchars($linkName) . "/</a>";
+            $status = 'success';
+        } else {
+            $msg = "Gagal membuat symlink otomatis melalui PHP (kemungkinan fungsi symlink() dinonaktifkan hosting).<br><br><strong>Solusi Alternatif Terbaik:</strong><br>1. Di cPanel, buka menu <strong>Subdomains</strong> atau <strong>Domains</strong>.<br>2. Buat subdomain baru (misal: <code>web.domainanda.com</code>) dan arahkan <strong>Document Root</strong> langsung ke folder <code>" . htmlspecialchars($targetPath) . "</code>.<br>3. Dengan cara ini, folder luar tersebut langsung resmi berstatus publik!";
+            $status = 'error';
+        }
+    }
+}
+?>
+<!DOCTYPE html>
+<html lang="id">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Symlink Maker cPanel - Ust. Jaenal Maskun</title>
+  <style>
+    body { font-family: system-ui, sans-serif; background: #064e3b; color: #fff; padding: 40px 20px; }
+    .box { max-width: 620px; margin: 0 auto; background: #042f2e; border: 1px solid #14b8a6; border-radius: 20px; padding: 28px; box-shadow: 0 20px 40px rgba(0,0,0,0.4); }
+    h2 { color: #fde68a; margin-top: 0; font-size: 1.3rem; }
+    .alert { padding: 14px 18px; border-radius: 12px; margin-bottom: 20px; font-size: 13.5px; line-height: 1.5; }
+    .alert-success { background: #065f46; color: #a7f3d0; border: 1px solid #34d399; }
+    .alert-error { background: #7f1d1d; color: #fecaca; border: 1px solid #f87171; }
+    .alert-warning { background: #78350f; color: #fde68a; border: 1px solid #fbbf24; }
+    .alert-info { background: #1e3a8a; color: #bfdbfe; border: 1px solid #60a5fa; }
+    label { display: block; font-size: 12.5px; color: #cbd5e1; margin-bottom: 6px; font-weight: bold; }
+    input { width: 100%; box-sizing: border-box; padding: 11px 14px; border-radius: 10px; border: 1px solid #334155; background: #0f172a; color: #fff; margin-bottom: 16px; font-size: 14px; }
+    button { background: #f59e0b; color: #022c22; font-weight: bold; border: none; padding: 13px 24px; border-radius: 12px; cursor: pointer; font-size: 14px; width: 100%; transition: opacity 0.2s; }
+    button:hover { opacity: 0.9; }
+    p, li { font-size: 13px; color: #cbd5e1; line-height: 1.6; }
+    code { background: rgba(0,0,0,0.3); padding: 2px 6px; border-radius: 6px; color: #fde68a; }
+  </style>
+</head>
+<body>
+<div class="box">
+  <h2>🔗 Utilitas Akses Folder Luar cPanel</h2>
+  <p>Alat ini menghubungkan berkas website yang berada di <strong>luar public_html</strong> agar dapat diakses oleh pengunjung melalui web browser.</p>
+
+  <?php if ($msg): ?>
+    <div class="alert alert-<?php echo $status; ?>"><?php echo $msg; ?></div>
+  <?php endif; ?>
+
+  <form method="POST">
+    <input type="hidden" name="action" value="create_symlink">
+    
+    <label>Lokasi Folder Sumber (Folder di Luar public_html):</label>
+    <input type="text" name="target_path" value="<?php echo htmlspecialchars($defaultTarget); ?>" required>
+    
+    <label>Nama Tautan di dalam public_html (misal: "web"):</label>
+    <input type="text" name="link_name" value="<?php echo htmlspecialchars($defaultLink); ?>" required>
+    
+    <button type="submit">Buat Tautan Simbolik (Symlink) Sekarang</button>
+  </form>
+
+  <div style="margin-top: 24px; border-top: 1px solid #134e4a; padding-top: 16px;">
+    <p><strong>💡 2 Solusi Alternatif di cPanel:</strong></p>
+    <ul>
+      <li><strong>Subdomain DocumentRoot:</strong> Buat subdomain di cPanel (misal: <code>web.domainanda.com</code>) lalu arahkan Document Root langsung ke folder di luar public_html.</li>
+      <li><strong>Folder di dalam public_html:</strong> Ekstrak ZIP di <code>public_html/web/</code> lalu taruh <code>bridge.html</code> di <code>public_html/index.html</code>.</li>
+    </ul>
+  </div>
+</div>
+</body>
+</html>
+`;
+}
+
+function generateCpanelIndexBridgePhp() {
+  return `<?php
+/**
+ * Jembatan PHP Otomatis (PHP Bridge Index)
+ * Web Personal Ust. Jaenal Maskun, S.Pd.I.
+ * 
+ * FUNGSI:
+ * Letakkan berkas ini sebagai \`public_html/index.php\` jika berkas web utama
+ * berada di subfolder (seperti \`public_html/web/\`) atau di luar public_html.
+ * Berkas ini akan langsung memuat dan melayani konten secara transparan.
+ */
+@ini_set('display_errors', '0');
+error_reporting(0);
+
+$docRoot = rtrim($_SERVER['DOCUMENT_ROOT'] ?? __DIR__, '/');
+$homeDir = dirname($docRoot);
+
+// Daftar kandidat lokasi folder aplikasi
+$candidates = [
+    $docRoot . '/web',
+    $docRoot . '/web_pribadi',
+    $docRoot . '/ust_jaenal',
+    $homeDir . '/web_pribadi',
+    $homeDir . '/web'
+];
+
+$targetDir = null;
+foreach ($candidates as $candidate) {
+    if (file_exists($candidate . '/index.php') || file_exists($candidate . '/index.html')) {
+        $targetDir = $candidate;
+        break;
+    }
+}
+
+if ($targetDir) {
+    if (file_exists($targetDir . '/index.php')) {
+        chdir($targetDir);
+        require $targetDir . '/index.php';
+        exit;
+    }
+    if (file_exists($targetDir . '/index.html')) {
+        echo file_get_contents($targetDir . '/index.html');
+        exit;
+    }
+}
+
+// Fallback jika belum terpasang: Arahkan via bridge.html jika ada
+if (file_exists(__DIR__ . '/bridge.html')) {
+    echo file_get_contents(__DIR__ . '/bridge.html');
+    exit;
+}
+?>
+<!DOCTYPE html>
+<html lang="id">
+<head>
+  <meta charset="UTF-8">
+  <title>Portal Web Ust. Jaenal Maskun, S.Pd.I.</title>
+  <style>
+    body { font-family: system-ui, sans-serif; background: #064e3b; color: #fff; text-align: center; padding: 60px 20px; }
+    .card { max-width: 520px; margin: 0 auto; background: #042f2e; border: 1px solid #14b8a6; border-radius: 20px; padding: 32px; box-shadow: 0 10px 30px rgba(0,0,0,0.3); }
+    h2 { color: #fde68a; margin-top: 0; }
+    p { font-size: 14px; color: #cbd5e1; line-height: 1.6; }
+    a.btn { display: inline-block; margin-top: 16px; padding: 12px 28px; background: #f59e0b; color: #022c22; font-weight: bold; border-radius: 12px; text-decoration: none; }
+  </style>
+</head>
+<body>
+  <div class="card">
+    <h2>🌿 Portal Web Ust. Jaenal Maskun, S.Pd.I.</h2>
+    <p>Selamat datang! Website terpasang di hosting Anda. Silakan buka tautan subfolder berikut:</p>
+    <a class="btn" href="./web/">Buka Folder /web/ &rarr;</a>
+  </div>
+</body>
+</html>
+`;
+}
+
+function generateCpanelFolderGuide() {
+  return `================================================================================
+PANDUAN MENGAKSES WEBSITE CPANEL JIKA DITARUH DI LUAR / SELAIN PUBLIC_HTML
+Web Personal Ust. Jaenal Maskun, S.Pd.I.
+================================================================================
+
+Apakah file website dapat diakses publik meski ditaruh di folder selain public_html?
+JAWABANNYA: YA, BISA! 
+
+Secara default di cPanel (web server Apache), folder yang terbuka untuk publik adalah
+folder "public_html". Jika Anda meletakkan file di folder lain, gunakan salah satu
+dari 4 pilihan solusi praktis berikut:
+
+--------------------------------------------------------------------------------
+SOLUSI 1: GUNAKAN SUBDOMAIN / ADDON DOMAIN (CARA PALING RESMI & DIREKOMENDASIKAN)
+--------------------------------------------------------------------------------
+cPanel mengizinkan Document Root sebuah Subdomain atau Addon Domain diarahkan
+ke folder mana pun, termasuk folder di luar public_html!
+
+Langkah-langkah:
+1. Masuk ke cPanel hosting Anda.
+2. Buka menu "Domains" atau "Subdomains".
+3. Buat domain/subdomain baru (misal: web.domainanda.com atau ustadz.domainanda.com).
+4. Pada kolom "Document Root", isi dengan lokasi folder tempat Anda mengekstrak ZIP
+   (Contoh: /home/username/web_pribadi atau /home/username/jaenalmaskun).
+5. Klik "Create" / "Submit".
+6. Selesai! Website Anda langsung dapat diakses publik 100% melalui subdomain tersebut
+   tanpa perlu menyentuh folder public_html sama sekali!
+
+--------------------------------------------------------------------------------
+SOLUSI 2: GUNAKAN FILE JEMBATAN "bridge.html" (REDIRECTOR OTOMATIS)
+--------------------------------------------------------------------------------
+Jika Anda mengekstrak website ke subfolder (misal: public_html/web/ atau 
+public_html/profil/):
+
+Langkah-langkah:
+1. Salin berkas "bridge.html" dari paket ZIP ini ke folder "public_html/".
+2. Ubah nama berkas tersebut menjadi "index.html" di dalam "public_html/".
+3. Setiap kali pengunjung membuka https://domainanda.com, browser akan langsung
+   otomatis dialihkan ke subfolder website Anda (misal: https://domainanda.com/web/).
+
+--------------------------------------------------------------------------------
+SOLUSI 3: GUNAKAN TAUTAN SIMBOLIK (SYMLINK) DENGAN "symlink_maker.php"
+--------------------------------------------------------------------------------
+Jika Anda menaruh folder website di luar public_html (misal: /home/username/web_pribadi):
+
+Langkah-langkah:
+1. Salin berkas "symlink_maker.php" ke dalam folder "public_html/".
+2. Buka browser dan akses: https://domainanda.com/symlink_maker.php
+3. Masukkan lokasi folder luar Anda, lalu klik "Buat Tautan Simbolik".
+4. Skrip akan membuat link simbolik sehingga folder luar tersebut langsung
+   bisa diakses publik melalui https://domainanda.com/web/.
+5. Setelah berhasil, Anda dapat menghapus berkas "symlink_maker.php".
+
+--------------------------------------------------------------------------------
+SOLUSI 4: GUNAKAN "index_bridge.php" SEBAGAI PROXY/WRAPPER DI PUBLIC_HTML
+--------------------------------------------------------------------------------
+1. Salin berkas "index_bridge.php" ke dalam folder "public_html/".
+2. Ubah namanya menjadi "index.php" di dalam "public_html/".
+3. Berkas ini akan otomatis mendeteksi dan memuat website dari folder tujuan Anda
+   secara langsung tanpa mengubah tampilan URL di browser!
+
+================================================================================
+Semoga panduan ini membantu kelancaran hosting website Ust. Jaenal Maskun, S.Pd.I.
+================================================================================
+`;
+}
+
 function generatePleskApiMessages() {
   return `<?php
 header('Content-Type: application/json; charset=utf-8');
@@ -6700,15 +7265,20 @@ if (class_exists('ZipArchive')) {
         $sql .= "REPLACE INTO \`site_settings\` (\`setting_key\`, \`setting_value\`) VALUES ('site_data', '" . $escapedData . "');\\n";
         $zip->addFromString('database.sql', $sql);
 
-        // 3. Uploads directory - Membackup 100% seluruh isi uploads tanpa ada yang tertinggal (logo, galeri foto, video, dokumen, dsb)
+        // 3. Uploads directory - Filter Cerdas: Hanya sertakan berkas media yang aktif digunakan di data website
         $uploadsDir = __DIR__ . '/../uploads';
         if (is_dir($uploadsDir)) {
+            $rawJson = json_encode($currentData);
+            $standardIcons = ['favicon.ico', 'favicon.png', 'apple-touch-icon.png', 'apple-touch-icon-precomposed.png', 'og-image.jpg', 'og-preview.jpg', 'thumbnail.jpg'];
             $files = scandir($uploadsDir);
             foreach ($files as $file) {
                 if ($file === '.' || $file === '..') continue;
                 $filePath = $uploadsDir . '/' . $file;
                 if (is_file($filePath)) {
-                    $zip->addFile($filePath, 'uploads/' . $file);
+                    // Hanya sertakan jika dipakai di JSON atau merupakan ikon standar
+                    if (in_array($file, $standardIcons) || strpos($rawJson, $file) !== false) {
+                        $zip->addFile($filePath, 'uploads/' . $file);
+                    }
                 }
             }
         }
@@ -6760,9 +7330,12 @@ exit;
 }
 
 // Export Plesk Zip Endpoint
-app.get('/api/export-plesk-zip', async (req, res) => {
+const handleExportPleskZip = async (req: any, res: any) => {
   try {
-    const currentData = cachedSiteData || loadSiteDataFromFile();
+    const incoming = req.body;
+    const currentData = (incoming && (incoming.siteContent || incoming.profile))
+      ? incoming
+      : (cachedSiteData || loadSiteDataFromFile());
     const zip = new JSZip();
 
     // 1. Root Database & Config files
@@ -6820,17 +7393,19 @@ Berkas data live (persisted_site_data.json, messages.json, db_config.local.php) 
 `);
     }
 
-    // 4. Uploads directory
+    // 4. Uploads directory - Smart filter active media only
     const uploadsDir = fs.existsSync(UPLOADS_PUBLIC_DIR)
       ? UPLOADS_PUBLIC_DIR
       : fs.existsSync(UPLOADS_DATA_DIR)
       ? UPLOADS_DATA_DIR
       : null;
 
+    const activeMediaFiles = getReferencedMediaSet(currentData);
     if (uploadsDir && fs.existsSync(uploadsDir)) {
       const uploadsFolder = zip.folder('uploads');
       const uploadFiles = fs.readdirSync(uploadsDir);
       for (const file of uploadFiles) {
+        if (!activeMediaFiles.has(file)) continue; // Skip deleted videos/orphans
         const filePath = path.join(uploadsDir, file);
         if (fs.statSync(filePath).isFile()) {
           uploadsFolder?.file(file, fs.readFileSync(filePath));
@@ -6844,6 +7419,7 @@ Berkas data live (persisted_site_data.json, messages.json, db_config.local.php) 
       const addFolderToZip = (dirPath: string, zipNode: JSZip) => {
         const items = fs.readdirSync(dirPath);
         for (const item of items) {
+          if (item === 'uploads' || item === 'assets/uploads') continue; // Prevent duplicating uploads
           const fullPath = path.join(dirPath, item);
           const stat = fs.statSync(fullPath);
           if (stat.isDirectory()) {
@@ -6877,12 +7453,18 @@ Berkas data live (persisted_site_data.json, messages.json, db_config.local.php) 
     console.error('Error generating Plesk ZIP:', err);
     res.status(500).json({ success: false, error: err.message || 'Gagal membuat paket ZIP Plesk' });
   }
-});
+};
+
+app.get('/api/export-plesk-zip', handleExportPleskZip);
+app.post('/api/export-plesk-zip', handleExportPleskZip);
 
 // Export cPanel Zip Endpoint
-app.get('/api/export-cpanel-zip', async (req, res) => {
+const handleExportCpanelZip = async (req: any, res: any) => {
   try {
-    const currentData = cachedSiteData || loadSiteDataFromFile();
+    const incoming = req.body;
+    const currentData = (incoming && (incoming.siteContent || incoming.profile))
+      ? incoming
+      : (cachedSiteData || loadSiteDataFromFile());
     const zip = new JSZip();
 
     // 1. Root Database & Config files for cPanel
@@ -6892,8 +7474,13 @@ app.get('/api/export-cpanel-zip', async (req, res) => {
     zip.file('index.php', generatePleskIndexPhp());
     zip.file('og-image.php', generateOgImagePhp());
     zip.file('unzip.php', generatePleskUnzipPhp());
+    zip.file('bridge.html', generateCpanelBridgeHtml());
+    zip.file('redirect.html', generateCpanelBridgeHtml());
+    zip.file('symlink_maker.php', generateCpanelSymlinkMakerPhp());
+    zip.file('index_bridge.php', generateCpanelIndexBridgePhp());
     zip.file('README_CPANEL.md', generatePleskReadme());
     zip.file('PANDUAN_HOSTING_CPANEL.txt', generatePleskReadme());
+    zip.file('PANDUAN_AKSES_FOLDER_LUAR_PUBLIC_HTML.txt', generateCpanelFolderGuide());
 
     // 2. Folder api/
     const apiFolder = zip.folder('api');
@@ -6940,17 +7527,19 @@ app.get('/api/export-cpanel-zip', async (req, res) => {
 - Seluruh isi artikel, agenda, buku, kontak, dan foto yang sudah tersimpan di hosting akan tetap AMAN 100%.`);
     }
 
-    // 4. Uploads directory
+    // 4. Uploads directory - Smart filter active media only
     const uploadsDir = fs.existsSync(UPLOADS_PUBLIC_DIR)
       ? UPLOADS_PUBLIC_DIR
       : fs.existsSync(UPLOADS_DATA_DIR)
       ? UPLOADS_DATA_DIR
       : null;
 
+    const activeMediaFiles = getReferencedMediaSet(currentData);
     if (uploadsDir && fs.existsSync(uploadsDir)) {
       const uploadsFolder = zip.folder('uploads');
       const uploadFiles = fs.readdirSync(uploadsDir);
       for (const file of uploadFiles) {
+        if (!activeMediaFiles.has(file)) continue; // Skip deleted videos/orphans
         const filePath = path.join(uploadsDir, file);
         if (fs.statSync(filePath).isFile()) {
           uploadsFolder?.file(file, fs.readFileSync(filePath));
@@ -6964,6 +7553,7 @@ app.get('/api/export-cpanel-zip', async (req, res) => {
       const addFolderToZip = (dirPath: string, zipNode: JSZip) => {
         const items = fs.readdirSync(dirPath);
         for (const item of items) {
+          if (item === 'uploads' || item === 'assets/uploads') continue; // Prevent duplicating uploads
           const fullPath = path.join(dirPath, item);
           const stat = fs.statSync(fullPath);
           if (stat.isDirectory()) {
@@ -6996,7 +7586,10 @@ app.get('/api/export-cpanel-zip', async (req, res) => {
     console.error('Error generating cPanel ZIP:', err);
     res.status(500).json({ success: false, error: err.message || 'Gagal membuat paket ZIP cPanel' });
   }
-});
+};
+
+app.get('/api/export-cpanel-zip', handleExportCpanelZip);
+app.post('/api/export-cpanel-zip', handleExportCpanelZip);
 
 // -------------------------------------------------------------
 // VITE & STATIC SERVING WITH DYNAMIC OG META INJECTION

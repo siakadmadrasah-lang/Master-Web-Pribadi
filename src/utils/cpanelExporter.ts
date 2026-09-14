@@ -132,7 +132,8 @@ ServerSignature Off
 # 9. URL Rewriting for Single Page Application & API Routing
 <IfModule mod_rewrite.c>
     RewriteEngine On
-    RewriteBase /
+    # RewriteBase dinamis - otomatis menyesuaikan bila ditaruh di root public_html ataupun subfolder
+    # RewriteBase /
 
     # Ensure HTTPS
     RewriteCond %{HTTPS} off
@@ -266,11 +267,20 @@ export const downloadCpanelPackageZip = async (
   footerConfig?: StickyFooterConfig,
   onProgress?: (percent: number, message: string) => void
 ): Promise<Blob> => {
-  if (onProgress) onProgress(25, 'Menyiapkan paket ZIP cPanel...');
+  if (onProgress) onProgress(25, 'Menyiapkan paket ZIP cPanel dari server...');
   try {
     const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), 3500);
-    const response = await fetch('/api/export-cpanel-zip', { signal: controller.signal });
+    const timer = setTimeout(() => controller.abort(), 60000);
+    const response = await fetch('/api/export-cpanel-zip', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        siteContent,
+        logoConfig,
+        stickyFooterConfig: footerConfig
+      }),
+      signal: controller.signal
+    });
     clearTimeout(timer);
     if (response.ok) {
       const contentType = response.headers.get('content-type') || '';
@@ -296,8 +306,52 @@ export const downloadCpanelPackageZip = async (
   zip.file('index.php', generateIndexPhpFallback());
   zip.file('og-image.php', generateOgImagePhp());
   zip.file('.htaccess', generateCpanelHtaccess());
+  zip.file('bridge.html', `<!DOCTYPE html>
+<html lang="id">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Website Resmi Ust. Jaenal Maskun, S.Pd.I.</title>
+  <script>
+    (function() {
+      var currentPath = window.location.pathname;
+      var params = new URLSearchParams(window.location.search);
+      var targetFolder = params.get('folder') || 'web';
+      if (currentPath.indexOf('/' + targetFolder) === 0) return;
+      var search = window.location.search ? window.location.search : '';
+      var hash = window.location.hash ? window.location.hash : '';
+      window.location.replace('/' + targetFolder + '/' + search + hash);
+    })();
+  </script>
+  <style>
+    body { font-family: system-ui, sans-serif; background: #064e3b; color: #fff; display: flex; align-items: center; justify-content: center; min-height: 100vh; margin: 0; text-align: center; }
+    .card { background: rgba(255,255,255,0.08); border: 1px solid rgba(251,191,36,0.3); border-radius: 20px; padding: 32px; max-width: 480px; width: 90%; }
+    h1 { font-size: 1.25rem; color: #fde68a; }
+    p { font-size: 0.9rem; color: #e2e8f0; line-height: 1.6; }
+    a.btn { display: inline-block; margin-top: 16px; padding: 12px 24px; background: #f59e0b; color: #022c22; font-weight: bold; border-radius: 12px; text-decoration: none; }
+  </style>
+</head>
+<body>
+  <div class="card">
+    <h1>Menghubungkan ke Website...</h1>
+    <p>Sedang memuat portal Ust. Jaenal Maskun, S.Pd.I. Klik di bawah jika tidak beralih otomatis:</p>
+    <a id="btn" class="btn" href="./web/">Buka Website Sekarang &rarr;</a>
+  </div>
+  <script>
+    var p = new URLSearchParams(window.location.search);
+    var t = p.get('folder') || 'web';
+    var b = document.getElementById('btn');
+    if (b) b.href = './' + t + '/';
+  </script>
+</body>
+</html>`);
+  zip.file('redirect.html', zip.file('bridge.html') ? '' : '');
   zip.file('README_CPANEL.md', generateCpanelReadme());
   zip.file('PANDUAN_HOSTING_CPANEL.txt', generateCpanelReadme());
+  zip.file('PANDUAN_AKSES_FOLDER_LUAR_PUBLIC_HTML.txt', `PANDUAN AKSES FOLDER SELAIN PUBLIC_HTML (cPanel):
+1. Subdomain / Addon Domain Document Root: Arahkan langsung Document Root subdomain Anda ke folder tersebut di cPanel.
+2. File Jembatan (bridge.html): Letakkan berkas bridge.html sebagai public_html/index.html untuk redirect instan.
+3. Tautan Simbolik: Gunakan symlink di cPanel untuk menghubungkan public_html ke folder luar.`);
 
   // 2. Folder api/
   const apiFolder = zip.folder('api');
