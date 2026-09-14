@@ -1,0 +1,2935 @@
+import JSZip from 'jszip';
+import { HeaderLogoConfig, StickyFooterConfig, SiteContentConfig } from '../types';
+import { defaultSiteContent } from '../data/personalData';
+import { generateDatabaseSql } from './sqlGenerator';
+
+export const PLESK_DB_CONFIG = {
+  host: 'localhost',
+  user: 'denbagus_webpersonal',
+  database: 'denbagues_webpersonal',
+  password: 'masbagus15',
+  port: 3306,
+  charset: 'utf8mb4',
+};
+
+export const generateDbConfigFile = (): string => {
+  return `<?php
+/**
+ * Konfigurasi & Koneksi Cerdas Database MySQL Hosting Plesk / cPanel
+ * Web Personal Ust. Jaenal Maskun, S.Pd.I.
+ * Auto-Recovery, Auto-Table Creation & Zero 500-Error Architecture
+ */
+
+@ini_set('display_errors', '0');
+error_reporting(0);
+
+// Cek apakah ada file konfigurasi custom atau local dari hosting
+if (file_exists(__DIR__ . '/db_config.local.php')) {
+    @require_once __DIR__ . '/db_config.local.php';
+}
+
+$configFile = __DIR__ . '/data/mysql_config.json';
+$customConfig = null;
+if (file_exists($configFile)) {
+    $customConfig = @json_decode(@file_get_contents($configFile), true);
+}
+
+if (!defined('DB_HOST')) define('DB_HOST', getenv('DB_HOST') ?: ($customConfig['host'] ?? '${PLESK_DB_CONFIG.host}'));
+if (!defined('DB_PORT')) define('DB_PORT', getenv('DB_PORT') ? (int)getenv('DB_PORT') : ($customConfig['port'] ?? ${PLESK_DB_CONFIG.port}));
+if (!defined('DB_USER')) define('DB_USER', getenv('DB_USER') ?: ($customConfig['user'] ?? '${PLESK_DB_CONFIG.user}'));
+if (!defined('DB_PASS')) define('DB_PASS', getenv('DB_PASS') ?: ($customConfig['password'] ?? '${PLESK_DB_CONFIG.password}'));
+if (!defined('DB_NAME')) define('DB_NAME', getenv('DB_NAME') ?: ($customConfig['database'] ?? '${PLESK_DB_CONFIG.database}'));
+if (!defined('DB_CHARSET')) define('DB_CHARSET', 'utf8mb4');
+
+function getDbConnection() {
+    static $pdo = null;
+    static $hasTried = false;
+    
+    if ($pdo !== null) {
+        return $pdo;
+    }
+    if ($hasTried) {
+        return null;
+    }
+    $hasTried = true;
+    
+    if (!extension_loaded('pdo') || !extension_loaded('pdo_mysql')) {
+        return null;
+    }
+
+    $hosts = [
+        DB_HOST,
+        'localhost',
+        '127.0.0.1',
+        'localhost:/var/run/mysqld/mysqld.sock',
+        'localhost:/tmp/mysql.sock'
+    ];
+    $hosts = array_unique($hosts);
+    
+    $options = [
+        PDO::ATTR_ERRMODE            => PDO::ERRMODE_SILENT,
+        PDO::ATTR_DEFAULT_FETCH_MODE => PDO::FETCH_ASSOC,
+        PDO::ATTR_EMULATE_PREPARES   => false,
+        PDO::ATTR_TIMEOUT            => 3,
+    ];
+
+    foreach ($hosts as $h) {
+        try {
+            if (strpos($h, 'sock') !== false) {
+                $sock = explode(':', $h)[1] ?? $h;
+                $dsn = "mysql:unix_socket={$sock};dbname=" . DB_NAME . ";charset=" . DB_CHARSET;
+            } else {
+                $dsn = "mysql:host={$h};port=" . DB_PORT . ";dbname=" . DB_NAME . ";charset=" . DB_CHARSET;
+            }
+            $instance = new PDO($dsn, DB_USER, DB_PASS, $options);
+            if ($instance) {
+                $pdo = $instance;
+                // Auto-create essential tables if they don't exist yet
+                autoInitMysqlTables($pdo);
+                
+                // Amankan konfigurasi ke db_config.local.php agar kebal dari timpaan ZIP
+                if (!file_exists(__DIR__ . '/db_config.local.php')) {
+                    $localPhp = "<?php\\n" .
+                        "if (!defined('DB_HOST')) define('DB_HOST', '" . addslashes(DB_HOST) . "');\\n" .
+                        "if (!defined('DB_PORT')) define('DB_PORT', " . (int)DB_PORT . ");\\n" .
+                        "if (!defined('DB_USER')) define('DB_USER', '" . addslashes(DB_USER) . "');\\n" .
+                        "if (!defined('DB_PASS')) define('DB_PASS', '" . addslashes(DB_PASS) . "');\\n" .
+                        "if (!defined('DB_NAME')) define('DB_NAME', '" . addslashes(DB_NAME) . "');\\n";
+                    @file_put_contents(__DIR__ . '/db_config.local.php', $localPhp);
+                }
+                
+                return $pdo;
+            }
+        } catch (Throwable $e) {
+            continue;
+        } catch (Exception $e) {
+            continue;
+        }
+    }
+    
+    return null;
+}
+
+function autoInitMysqlTables($pdo) {
+    if (!$pdo) return;
+    try {
+        // 1. Tabel site_settings
+        $pdo->exec("CREATE TABLE IF NOT EXISTS \`site_settings\` (
+            \`id\` int(11) NOT NULL AUTO_INCREMENT,
+            \`setting_key\` varchar(100) NOT NULL UNIQUE,
+            \`setting_value\` LONGTEXT NOT NULL,
+            \`updated_at\` timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+            PRIMARY KEY (\`id\`)
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci");
+
+        // 2. Tabel messages
+        $pdo->exec("CREATE TABLE IF NOT EXISTS \`messages\` (
+            \`id\` int(11) NOT NULL AUTO_INCREMENT,
+            \`sender_name\` varchar(150) NOT NULL,
+            \`institution\` varchar(150) DEFAULT NULL,
+            \`email\` varchar(150) NOT NULL,
+            \`phone\` varchar(50) DEFAULT NULL,
+            \`event_type\` varchar(100) DEFAULT NULL,
+            \`event_date\` varchar(100) DEFAULT NULL,
+            \`message\` text NOT NULL,
+            \`is_read\` tinyint(1) NOT NULL DEFAULT 0,
+            \`created_at\` timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            PRIMARY KEY (\`id\`)
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci");
+
+        // 3. Tabel admin_users
+        $pdo->exec("CREATE TABLE IF NOT EXISTS \`admin_users\` (
+            \`id\` int(11) NOT NULL AUTO_INCREMENT,
+            \`name\` varchar(150) NOT NULL DEFAULT 'Ust. Jaenal Maskun',
+            \`email\` varchar(150) NOT NULL UNIQUE,
+            \`password_hash\` varchar(255) NOT NULL,
+            \`role\` varchar(50) NOT NULL DEFAULT 'Super Admin',
+            \`created_at\` timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            PRIMARY KEY (\`id\`)
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci");
+
+        // Cek jika site_settings masih kosong, auto seed dari file JSON default
+        $stmt = $pdo->query("SELECT COUNT(*) as cnt FROM site_settings WHERE setting_key = 'site_data'");
+        if ($stmt) {
+            $row = $stmt->fetch();
+            if (empty($row['cnt']) || (int)$row['cnt'] === 0) {
+                $dataFile = __DIR__ . '/data/persisted_site_data.json';
+                if (!file_exists($dataFile)) $dataFile = __DIR__ . '/data/site_data.json';
+                if (!file_exists($dataFile)) $dataFile = __DIR__ . '/data/site_data.default.json';
+                if (file_exists($dataFile)) {
+                    $json = @file_get_contents($dataFile);
+                    if ($json) {
+                        $ins = $pdo->prepare("INSERT INTO site_settings (setting_key, setting_value) VALUES ('site_data', ?) ON DUPLICATE KEY UPDATE setting_value = VALUES(setting_value)");
+                        if ($ins) $ins->execute([$json]);
+                    }
+                }
+            }
+        }
+    } catch (Throwable $e) {}
+}
+`;
+};
+
+export const generateHtaccessFile = (): string => {
+  return `# ========================================================
+# PLESK & APACHE .HTACCESS CONFIGURATION
+# Web Personal Ust. Jaenal Maskun, S.Pd.I.
+# Ultra-Compatible: Aman dari Kesalahan 500 Server Error
+# ========================================================
+
+DirectoryIndex index.php index.html
+
+<IfModule mod_rewrite.c>
+    RewriteEngine On
+    RewriteBase /
+
+    # Cegah akses langsung ke file sensitif
+    RewriteRule ^(db_config\\.php|db_config\\.local\\.php|database\\.sql|\\.git|\\.env|package\\.json|server\\.ts) - [F,L,NC]
+
+    # Layani thumbnail OpenGraph sosial media secara dinamis dengan anti-cache
+    RewriteRule ^(og-image|thumbnail|og-preview)\\.(jpg|jpeg|png)$ og-image.php [QSA,L]
+
+    # Pastikan request root dan index.html diproses index.php untuk injeksi OpenGraph & database live
+    RewriteRule ^$ index.php [QSA,L]
+    RewriteRule ^index\\.html$ index.php [QSA,L]
+
+    # Petakan rute API ke skrip PHP yang sesuai
+    RewriteRule ^api/site-data/?$ api/site-data.php [QSA,L]
+    RewriteRule ^api/site-content/?$ api/site-content.php [QSA,L]
+    RewriteRule ^api/logo-config/?$ api/logo-config.php [QSA,L]
+    RewriteRule ^api/sticky-footer-config/?$ api/sticky-footer-config.php [QSA,L]
+    RewriteRule ^api/sync-to-mysql/?$ api/sync-to-mysql.php [QSA,L]
+    RewriteRule ^api/share-settings/?$ api/share-settings.php [QSA,L]
+    RewriteRule ^api/upload-thumbnail/?$ api/upload-thumbnail.php [QSA,L]
+    RewriteRule ^api/sync-status/?$ api/sync-status.php [QSA,L]
+    RewriteRule ^api/upload-image/?$ api/upload-image.php [QSA,L]
+    RewriteRule ^api/upload-file/?$ api/upload-file.php [QSA,L]
+    RewriteRule ^api/upload-video-chunk/?$ api/upload-video-chunk.php [QSA,L]
+    RewriteRule ^api/upload-video/?$ api/upload-video.php [QSA,L]
+    RewriteRule ^api/upload-video-form/?$ api/upload-video.php [QSA,L]
+    RewriteRule ^api/messages/?$ api/messages.php [QSA,L]
+    RewriteRule ^api/settings/?$ api/settings.php [QSA,L]
+    RewriteRule ^api/test-db/?$ api/test_db.php [QSA,L]
+    RewriteRule ^api/mysql-status/?$ api/test_db.php [QSA,L]
+    RewriteRule ^api/admin/login/?$ api/admin-login.php [QSA,L]
+    RewriteRule ^api/admin-login/?$ api/admin-login.php [QSA,L]
+    RewriteRule ^api/backup/zip-data/?$ api/backup-zip.php [QSA,L]
+    RewriteRule ^api/export-plesk-zip/?$ api/export-zip.php [QSA,L]
+
+    # Jika file fisik aset (.js, .css, .jpg, .png, .svg, .mp4, dll) ada, layani langsung
+    RewriteCond %{REQUEST_FILENAME} -f [OR]
+    RewriteCond %{REQUEST_FILENAME} -d
+    RewriteCond %{REQUEST_URI} !\\.(html|htm)$ [NC]
+    RewriteRule ^ - [L]
+
+    # SPA Fallback ke index.php
+    RewriteRule ^(.*)$ index.php [QSA,L]
+</IfModule>
+
+<IfModule mod_mime.c>
+    AddType video/mp4 .mp4 .m4v
+    AddType video/webm .webm
+    AddType video/ogg .ogv
+    AddType video/quicktime .mov .qt
+    AddType video/x-matroska .mkv
+    AddType audio/mpeg .mp3
+    AddType audio/wav .wav
+    AddType audio/ogg .oga .ogg
+    AddType audio/mp4 .m4a .aac
+</IfModule>
+
+<IfModule mod_headers.c>
+    Header always set Access-Control-Allow-Origin "*"
+    Header always set Access-Control-Allow-Methods "GET, POST, OPTIONS, PUT, DELETE, PATCH, HEAD"
+    Header always set Access-Control-Allow-Headers "Origin, X-Requested-With, Content-Type, Accept, Authorization, Cache-Control, Range, X-Upload-Id, X-Chunk-Index, X-Total-Chunks, X-Filename, X-Title, X-Duration, X-Width, X-Height, X-Thumbnail"
+    Header always set Accept-Ranges "bytes"
+    Header always set X-Content-Type-Options "nosniff"
+</IfModule>
+`;
+};
+
+export const generateIndexPhpFallback = (): string => {
+  return `<?php
+/**
+ * Dynamic Entry Point & Social Media Meta Injector for Plesk Hosting
+ * Web Personal Ust. Jaenal Maskun, S.Pd.I.
+ */
+@ini_set('display_errors', '0');
+error_reporting(0);
+
+$siteData = null;
+$dataFile1 = __DIR__ . '/data/persisted_site_data.json';
+$dataFile2 = __DIR__ . '/data/site_data.json';
+
+// 1. Prioritas Utama: Ambil dari database MySQL Plesk
+if (file_exists(__DIR__ . '/db_config.php')) {
+    @require_once __DIR__ . '/db_config.php';
+    if (function_exists('getDbConnection')) {
+        try {
+            $pdo = getDbConnection();
+            if ($pdo) {
+                $stmt = $pdo->prepare("SELECT setting_value FROM site_settings WHERE setting_key = 'site_data' LIMIT 1");
+                if ($stmt && $stmt->execute()) {
+                    $row = $stmt->fetch();
+                    if ($row && !empty($row['setting_value'])) {
+                        $dbData = @json_decode($row['setting_value'], true);
+                        if ($dbData && is_array($dbData)) {
+                            $siteData = $dbData;
+                        }
+                    }
+                }
+            }
+        } catch (Throwable $e) {}
+    }
+}
+
+// 2. Jika MySQL belum aktif atau kosong, fallback baca dari file JSON data tersimpan
+if (!$siteData && file_exists($dataFile1)) {
+    $json = @file_get_contents($dataFile1);
+    if ($json) $siteData = @json_decode($json, true);
+}
+if (!$siteData && file_exists($dataFile2)) {
+    $json = @file_get_contents($dataFile2);
+    if ($json) $siteData = @json_decode($json, true);
+}
+$dataFileDefault = __DIR__ . '/data/site_data.default.json';
+if (!$siteData && file_exists($dataFileDefault)) {
+    $json = @file_get_contents($dataFileDefault);
+    if ($json) {
+        $siteData = @json_decode($json, true);
+        // Anti Data-Loss: HANYA salin ke file persisted jika belum ada sama sekali atau kosong
+        if (!file_exists($dataFile1) || filesize($dataFile1) < 20) {
+            @file_put_contents($dataFile1, $json);
+        }
+    }
+}
+
+$profile = $siteData['siteContent']['profile'] ?? null;
+$share = $siteData['siteContent']['shareSettings'] ?? null;
+$logoConf = $siteData['logoConfig'] ?? null;
+
+$isHttps = (!empty($_SERVER['HTTPS']) && $_SERVER['HTTPS'] !== 'off')
+    || (isset($_SERVER['SERVER_PORT']) && $_SERVER['SERVER_PORT'] == 443)
+    || (isset($_SERVER['HTTP_X_FORWARDED_PROTO']) && $_SERVER['HTTP_X_FORWARDED_PROTO'] === 'https');
+$protocol = $isHttps ? 'https://' : 'http://';
+$host = $_SERVER['HTTP_HOST'] ?? 'localhost';
+$baseUrl = $protocol . $host;
+$reqUri = $_SERVER['REQUEST_URI'] ?? '/';
+$canonicalUrl = $baseUrl . $reqUri;
+
+$title = htmlspecialchars($share['title'] ?? ($profile['title'] ?? 'Ust. Jaenal Maskun, S.Pd.I. | Pendidik, Akademisi & Penggerak Madrasah'), ENT_QUOTES, 'UTF-8');
+$desc = htmlspecialchars($share['description'] ?? ($profile['tagline'] ?? $profile['bio'] ?? 'Website Resmi Ust. Jaenal Maskun, S.Pd.I. - Menyemai Adab, Menumbuhkan Intelektual, Mengabdi untuk Kemuliaan Umat.'), ENT_QUOTES, 'UTF-8');
+
+$avatar = $share['thumbnailUrl'] ?? ($profile['avatarUrl'] ?? '/og-image.jpg');
+$imgVersion = time();
+
+if (!preg_match('/^https?:\\/\\//i', $avatar)) {
+    $cleanPath = ltrim(parse_url($avatar, PHP_URL_PATH), '/');
+    if (!empty($cleanPath) && file_exists(__DIR__ . '/' . $cleanPath)) {
+        $imgVersion = filemtime(__DIR__ . '/' . $cleanPath);
+        $avatarUrl = $baseUrl . '/' . $cleanPath . '?v=' . $imgVersion;
+    } elseif (file_exists(__DIR__ . '/og-image.jpg')) {
+        $imgVersion = filemtime(__DIR__ . '/og-image.jpg');
+        $avatarUrl = $baseUrl . '/og-image.jpg?v=' . $imgVersion;
+    } elseif (file_exists(__DIR__ . '/thumbnail.jpg')) {
+        $imgVersion = filemtime(__DIR__ . '/thumbnail.jpg');
+        $avatarUrl = $baseUrl . '/thumbnail.jpg?v=' . $imgVersion;
+    } else {
+        $avatarUrl = $baseUrl . '/' . ($cleanPath ?: 'og-image.jpg') . '?v=' . $imgVersion;
+    }
+} else {
+    $avatarUrl = $avatar . (strpos($avatar, '?') !== false ? '&v=' . $imgVersion : '?v=' . $imgVersion);
+}
+
+$htmlFile = file_exists(__DIR__ . '/dist/index.html') ? __DIR__ . '/dist/index.html' : __DIR__ . '/index.html';
+
+if (file_exists($htmlFile)) {
+    $html = @file_get_contents($htmlFile);
+    if ($html) {
+        // Update tag Title & Meta Description
+        $html = preg_replace('/<title>.*?<\\/title>/i', '<title>' . $title . '</title>', $html);
+        $html = preg_replace('/<meta\\s+name="description"\\s+content="[^"]*"/i', '<meta name="description" content="' . $desc . '"', $html);
+        $html = preg_replace('/<meta\\s+property="og:title"\\s+content="[^"]*"/i', '<meta property="og:title" content="' . $title . '"', $html);
+        $html = preg_replace('/<meta\\s+property="og:description"\\s+content="[^"]*"/i', '<meta property="og:description" content="' . $desc . '"', $html);
+        $html = preg_replace('/<meta\\s+property="og:url"\\s+content="[^"]*"/i', '<meta property="og:url" content="' . $canonicalUrl . '"', $html);
+        $html = preg_replace('/<meta\\s+property="og:image"\\s+content="[^"]*"/i', '<meta property="og:image" content="' . $avatarUrl . '"', $html);
+        $html = preg_replace('/<meta\\s+property="og:image:secure_url"\\s+content="[^"]*"/i', '<meta property="og:image:secure_url" content="' . $avatarUrl . '"', $html);
+        $html = preg_replace('/<meta\\s+name="twitter:title"\\s+content="[^"]*"/i', '<meta name="twitter:title" content="' . $title . '"', $html);
+        $html = preg_replace('/<meta\\s+name="twitter:description"\\s+content="[^"]*"/i', '<meta name="twitter:description" content="' . $desc . '"', $html);
+        $html = preg_replace('/<meta\\s+name="twitter:url"\\s+content="[^"]*"/i', '<meta name="twitter:url" content="' . $canonicalUrl . '"', $html);
+        $html = preg_replace('/<meta\\s+name="twitter:image"\\s+content="[^"]*"/i', '<meta name="twitter:image" content="' . $avatarUrl . '"', $html);
+        $html = preg_replace('/<meta\\s+name="twitter:image:src"\\s+content="[^"]*"/i', '<meta name="twitter:image:src" content="' . $avatarUrl . '"', $html);
+        $html = preg_replace('/<meta\\s+itemprop="image"\\s+content="[^"]*"/i', '<meta itemprop="image" content="' . $avatarUrl . '"', $html);
+        $html = preg_replace('/<meta\\s+name="thumbnail"\\s+content="[^"]*"/i', '<meta name="thumbnail" content="' . $avatarUrl . '"', $html);
+        $html = preg_replace('/<link\\s+rel="image_src"\\s+href="[^"]*"/i', '<link rel="image_src" href="' . $avatarUrl . '"', $html);
+        $html = preg_replace('/<link\\s+rel="canonical"\\s+href="[^"]*"/i', '<link rel="canonical" href="' . $canonicalUrl . '"', $html);
+        $html = preg_replace('/"image":\\s*"[^"]*"/i', '"image": "' . $avatarUrl . '"', $html);
+        
+        // Update Favicon link jika ada konfigurasi khusus
+        if (!empty($logoConf['faviconUrl'])) {
+            $fav = htmlspecialchars($logoConf['faviconUrl'], ENT_QUOTES, 'UTF-8');
+            $html = preg_replace('/<link\\s+rel="icon"[^>]*href="[^"]*"/i', '<link rel="icon" href="' . $fav . '"', $html);
+            $html = preg_replace('/<link\\s+rel="shortcut icon"[^>]*href="[^"]*"/i', '<link rel="shortcut icon" href="' . $fav . '"', $html);
+        }
+
+        // Inject Data JSON ke Window agar langsung terbaca di HP / Laptop baru tanpa lag
+        // Proteksi OOM Crash: Batasi maksimal 250KB untuk inline script agar browser HP tidak kehabisan memori
+        if ($siteData) {
+            $jsonEncoded = json_encode($siteData, JSON_HEX_TAG | JSON_HEX_AMP | JSON_HEX_APOS | JSON_HEX_QUOT | JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
+            if ($jsonEncoded && strlen($jsonEncoded) < 250000) {
+                $inlineScript = '<script id="__INITIAL_SITE_DATA__">window.__INITIAL_SITE_DATA__ = ' . $jsonEncoded . ';</script>';
+                if (strpos($html, '</head>') !== false) {
+                    $html = str_replace('</head>', $inlineScript . "\\n</head>", $html);
+                } else {
+                    $html = $inlineScript . $html;
+                }
+            }
+        }
+        
+        @header('Content-Type: text/html; charset=utf-8');
+        @header('Cache-Control: no-cache, no-store, must-revalidate');
+        echo $html;
+        exit;
+    }
+}
+
+@header('Content-Type: text/html; charset=utf-8');
+echo '<!DOCTYPE html><html><head><title>Web Personal Ust. Jaenal Maskun</title><meta charset="utf-8"></head><body style="font-family:sans-serif;text-align:center;padding:50px;"><h2>Web Personal Ust. Jaenal Maskun, S.Pd.I.</h2><p>Memuat aplikasi...</p></body></html>';
+`;
+};
+
+export const generateApiSiteDataPhp = (): string => {
+  return `<?php
+/**
+ * API Handler: Sinkronisasi Lengkap Data Website (Plesk MySQL / JSON)
+ * Web Personal Ust. Jaenal Maskun, S.Pd.I.
+ */
+@ini_set('display_errors', '0');
+error_reporting(0);
+
+header('Content-Type: application/json; charset=utf-8');
+header('Access-Control-Allow-Origin: *');
+header('Access-Control-Allow-Methods: GET, POST, OPTIONS');
+header('Access-Control-Allow-Headers: Content-Type, Authorization');
+
+if ($_SERVER['REQUEST_METHOD'] === 'OPTIONS') {
+    http_response_code(200);
+    exit;
+}
+
+require_once __DIR__ . '/../db_config.php';
+$dataFile1 = __DIR__ . '/../data/persisted_site_data.json';
+$dataFile2 = __DIR__ . '/../data/site_data.json';
+
+if (!is_dir(__DIR__ . '/../data')) {
+    @mkdir(__DIR__ . '/../data', 0755, true);
+}
+
+$pdo = getDbConnection();
+
+if ($_SERVER['REQUEST_METHOD'] === 'GET') {
+    $data = null;
+    $lastUpdated = time() * 1000;
+    
+    if ($pdo) {
+        try {
+            $stmt = $pdo->prepare("SELECT setting_value, UNIX_TIMESTAMP(updated_at)*1000 as lastUpdated FROM site_settings WHERE setting_key = 'site_data' LIMIT 1");
+            if ($stmt && $stmt->execute()) {
+                $row = $stmt->fetch();
+                if ($row && !empty($row['setting_value'])) {
+                    $parsed = @json_decode($row['setting_value'], true);
+                    if ($parsed && is_array($parsed)) {
+                        $data = $parsed;
+                        if (!empty($row['lastUpdated'])) {
+                            $lastUpdated = (int)$row['lastUpdated'];
+                        }
+                    }
+                }
+            }
+        } catch (Throwable $e) {} catch (Exception $e) {}
+    }
+    
+    if (!$data) {
+        if (file_exists($dataFile1) && filesize($dataFile1) > 20) {
+            $data = @json_decode(@file_get_contents($dataFile1), true);
+        } elseif (file_exists($dataFile2) && filesize($dataFile2) > 20) {
+            $data = @json_decode(@file_get_contents($dataFile2), true);
+        }
+        $dataFileDefault = __DIR__ . '/../data/site_data.default.json';
+        if (!$data && file_exists($dataFileDefault)) {
+            $data = @json_decode(@file_get_contents($dataFileDefault), true);
+            if ($data && (!file_exists($dataFile1) || filesize($dataFile1) < 20)) {
+                @file_put_contents($dataFile1, json_encode($data, JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES));
+            }
+        }
+        if ($data && !empty($data['lastUpdated'])) {
+            $lastUpdated = (int)$data['lastUpdated'];
+        }
+    }
+    
+    echo json_encode([
+        'success' => true,
+        'data' => $data,
+        'lastUpdated' => $lastUpdated,
+        'isMySQLConnected' => $pdo ? true : false,
+        'storageEngine' => $pdo ? 'MySQL Plesk' : 'File JSON'
+    ], JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
+    exit;
+}
+
+if ($_SERVER['REQUEST_METHOD'] === 'POST') {
+    $raw = @file_get_contents('php://input');
+    $payload = @json_decode($raw, true);
+    
+    if (!$payload || !is_array($payload)) {
+        http_response_code(400);
+        echo json_encode(['success' => false, 'error' => 'Data tidak valid']);
+        exit;
+    }
+    
+    $nowTs = time() * 1000;
+    $payload['lastUpdated'] = $nowTs;
+    
+    // Simpan ke berkas JSON sebagai backup & zero-latency cache
+    $jsonStr = json_encode($payload, JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
+    @file_put_contents($dataFile1, $jsonStr);
+    @file_put_contents($dataFile2, $jsonStr);
+    
+    // Simpan ke MySQL Plesk
+    $savedToDb = false;
+    if ($pdo) {
+        try {
+            $stmt = $pdo->prepare("INSERT INTO site_settings (setting_key, setting_value) VALUES ('site_data', ?) ON DUPLICATE KEY UPDATE setting_value = VALUES(setting_value), updated_at = CURRENT_TIMESTAMP");
+            if ($stmt && $stmt->execute([json_encode($payload, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES)])) {
+                $savedToDb = true;
+            }
+        } catch (Throwable $e) {
+            error_log("Gagal simpan ke MySQL: " . $e->getMessage());
+        } catch (Exception $e) {}
+    }
+    
+    echo json_encode([
+        'success' => true,
+        'message' => 'Pengaturan website berhasil disimpan.',
+        'lastUpdated' => $nowTs,
+        'savedToDb' => $savedToDb,
+        'storageEngine' => $savedToDb ? 'MySQL Plesk' : 'File JSON'
+    ], JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
+    exit;
+}
+`;
+};
+
+export const generateApiSiteContentPhp = (): string => {
+  return `<?php
+/**
+ * API Handler: Update Konten Website (Site Content)
+ */
+@ini_set('display_errors', '0');
+error_reporting(0);
+
+header('Content-Type: application/json; charset=utf-8');
+header('Access-Control-Allow-Origin: *');
+header('Access-Control-Allow-Methods: GET, POST, OPTIONS');
+header('Access-Control-Allow-Headers: Content-Type, Authorization');
+
+if ($_SERVER['REQUEST_METHOD'] === 'OPTIONS') {
+    http_response_code(200);
+    exit;
+}
+
+require_once __DIR__ . '/../db_config.php';
+$dataFile1 = __DIR__ . '/../data/persisted_site_data.json';
+$dataFile2 = __DIR__ . '/../data/site_data.json';
+if (!is_dir(__DIR__ . '/../data')) {
+    @mkdir(__DIR__ . '/../data', 0755, true);
+}
+
+$pdo = getDbConnection();
+
+$currentData = [];
+if ($pdo) {
+    try {
+        $stmt = $pdo->query("SELECT setting_value FROM site_settings WHERE setting_key = 'site_data' LIMIT 1");
+        if ($stmt) {
+            $row = $stmt->fetch();
+            if (!empty($row['setting_value'])) {
+                $currentData = @json_decode($row['setting_value'], true) ?: [];
+            }
+        }
+    } catch (Throwable $e) {}
+}
+if (empty($currentData)) {
+    if (file_exists($dataFile1) && filesize($dataFile1) > 20) $currentData = @json_decode(@file_get_contents($dataFile1), true) ?: [];
+    elseif (file_exists($dataFile2) && filesize($dataFile2) > 20) $currentData = @json_decode(@file_get_contents($dataFile2), true) ?: [];
+    $dataFileDefault = __DIR__ . '/../data/site_data.default.json';
+    if (empty($currentData) && file_exists($dataFileDefault)) {
+        $currentData = @json_decode(@file_get_contents($dataFileDefault), true) ?: [];
+    }
+}
+
+if ($_SERVER['REQUEST_METHOD'] === 'GET') {
+    echo json_encode([
+        'success' => true,
+        'siteContent' => $currentData['siteContent'] ?? [],
+        'lastUpdated' => $currentData['lastUpdated'] ?? (time() * 1000)
+    ]);
+    exit;
+}
+
+if ($_SERVER['REQUEST_METHOD'] === 'POST') {
+    $raw = @file_get_contents('php://input');
+    $content = @json_decode($raw, true);
+    if (!$content || !is_array($content)) {
+        http_response_code(400);
+        echo json_encode(['success' => false, 'error' => 'Data konten tidak valid']);
+        exit;
+    }
+    
+    $siteContentPayload = isset($content['siteContent']) ? $content['siteContent'] : $content;
+    $nowTs = time() * 1000;
+    
+    $currentData['siteContent'] = $siteContentPayload;
+    $currentData['lastUpdated'] = $nowTs;
+    
+    $jsonStr = json_encode($currentData, JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
+    @file_put_contents($dataFile1, $jsonStr);
+    @file_put_contents($dataFile2, $jsonStr);
+    
+    $savedToDb = false;
+    if ($pdo) {
+        try {
+            $stmt = $pdo->prepare("INSERT INTO site_settings (setting_key, setting_value) VALUES ('site_data', ?) ON DUPLICATE KEY UPDATE setting_value = VALUES(setting_value), updated_at = CURRENT_TIMESTAMP");
+            if ($stmt && $stmt->execute([json_encode($currentData, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES)])) {
+                $savedToDb = true;
+            }
+        } catch (Throwable $e) {}
+    }
+    
+    echo json_encode([
+        'success' => true,
+        'message' => 'Konten website berhasil disimpan ke database dan server.',
+        'lastUpdated' => $nowTs,
+        'savedToDb' => $savedToDb,
+        'storageEngine' => $savedToDb ? 'MySQL Plesk' : 'File JSON'
+    ]);
+    exit;
+}
+`;
+};
+
+export const generateApiLogoConfigPhp = (): string => {
+  return `<?php
+/**
+ * API Handler: Update Konfigurasi Header Logo & Favicon
+ */
+@ini_set('display_errors', '0');
+error_reporting(0);
+
+header('Content-Type: application/json; charset=utf-8');
+header('Access-Control-Allow-Origin: *');
+header('Access-Control-Allow-Methods: GET, POST, OPTIONS');
+header('Access-Control-Allow-Headers: Content-Type, Authorization');
+
+if ($_SERVER['REQUEST_METHOD'] === 'OPTIONS') {
+    http_response_code(200);
+    exit;
+}
+
+require_once __DIR__ . '/../db_config.php';
+$dataFile1 = __DIR__ . '/../data/persisted_site_data.json';
+$dataFile2 = __DIR__ . '/../data/site_data.json';
+
+$pdo = getDbConnection();
+
+$currentData = [];
+if ($pdo) {
+    try {
+        $stmt = $pdo->query("SELECT setting_value FROM site_settings WHERE setting_key = 'site_data' LIMIT 1");
+        if ($stmt) {
+            $row = $stmt->fetch();
+            if (!empty($row['setting_value'])) {
+                $currentData = @json_decode($row['setting_value'], true) ?: [];
+            }
+        }
+    } catch (Throwable $e) {}
+}
+if (empty($currentData)) {
+    if (file_exists($dataFile1) && filesize($dataFile1) > 20) $currentData = @json_decode(@file_get_contents($dataFile1), true) ?: [];
+    elseif (file_exists($dataFile2) && filesize($dataFile2) > 20) $currentData = @json_decode(@file_get_contents($dataFile2), true) ?: [];
+    $dataFileDefault = __DIR__ . '/../data/site_data.default.json';
+    if (empty($currentData) && file_exists($dataFileDefault)) {
+        $currentData = @json_decode(@file_get_contents($dataFileDefault), true) ?: [];
+    }
+}
+
+if ($_SERVER['REQUEST_METHOD'] === 'POST') {
+    $raw = @file_get_contents('php://input');
+    $logoPayload = @json_decode($raw, true);
+    if (!$logoPayload || !is_array($logoPayload)) {
+        http_response_code(400);
+        echo json_encode(['success' => false, 'error' => 'Data logo tidak valid']);
+        exit;
+    }
+    
+    $logo = isset($logoPayload['logoConfig']) ? $logoPayload['logoConfig'] : $logoPayload;
+    $nowTs = time() * 1000;
+    
+    $currentData['logoConfig'] = $logo;
+    $currentData['lastUpdated'] = $nowTs;
+    
+    $jsonStr = json_encode($currentData, JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
+    @file_put_contents($dataFile1, $jsonStr);
+    @file_put_contents($dataFile2, $jsonStr);
+    
+    $savedToDb = false;
+    if ($pdo) {
+        try {
+            $stmt = $pdo->prepare("INSERT INTO site_settings (setting_key, setting_value) VALUES ('site_data', ?) ON DUPLICATE KEY UPDATE setting_value = VALUES(setting_value), updated_at = CURRENT_TIMESTAMP");
+            if ($stmt && $stmt->execute([json_encode($currentData, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES)])) {
+                $savedToDb = true;
+            }
+        } catch (Throwable $e) {}
+    }
+    
+    echo json_encode([
+        'success' => true,
+        'message' => 'Konfigurasi logo berhasil disimpan.',
+        'lastUpdated' => $nowTs,
+        'savedToDb' => $savedToDb
+    ]);
+    exit;
+}
+`;
+};
+
+export const generateApiStickyFooterConfigPhp = (): string => {
+  return `<?php
+/**
+ * API Handler: Update Konfigurasi Sticky Footer Menu
+ */
+@ini_set('display_errors', '0');
+error_reporting(0);
+
+header('Content-Type: application/json; charset=utf-8');
+header('Access-Control-Allow-Origin: *');
+header('Access-Control-Allow-Methods: GET, POST, OPTIONS');
+header('Access-Control-Allow-Headers: Content-Type, Authorization');
+
+if ($_SERVER['REQUEST_METHOD'] === 'OPTIONS') {
+    http_response_code(200);
+    exit;
+}
+
+require_once __DIR__ . '/../db_config.php';
+$dataFile1 = __DIR__ . '/../data/persisted_site_data.json';
+$dataFile2 = __DIR__ . '/../data/site_data.json';
+
+$pdo = getDbConnection();
+
+$currentData = [];
+if ($pdo) {
+    try {
+        $stmt = $pdo->query("SELECT setting_value FROM site_settings WHERE setting_key = 'site_data' LIMIT 1");
+        if ($stmt) {
+            $row = $stmt->fetch();
+            if (!empty($row['setting_value'])) {
+                $currentData = @json_decode($row['setting_value'], true) ?: [];
+            }
+        }
+    } catch (Throwable $e) {}
+}
+if (empty($currentData)) {
+    if (file_exists($dataFile1) && filesize($dataFile1) > 20) $currentData = @json_decode(@file_get_contents($dataFile1), true) ?: [];
+    elseif (file_exists($dataFile2) && filesize($dataFile2) > 20) $currentData = @json_decode(@file_get_contents($dataFile2), true) ?: [];
+    $dataFileDefault = __DIR__ . '/../data/site_data.default.json';
+    if (empty($currentData) && file_exists($dataFileDefault)) {
+        $currentData = @json_decode(@file_get_contents($dataFileDefault), true) ?: [];
+    }
+}
+
+if ($_SERVER['REQUEST_METHOD'] === 'POST') {
+    $raw = @file_get_contents('php://input');
+    $footerPayload = @json_decode($raw, true);
+    if (!$footerPayload || !is_array($footerPayload)) {
+        http_response_code(400);
+        echo json_encode(['success' => false, 'error' => 'Data menu tidak valid']);
+        exit;
+    }
+    
+    $footer = isset($footerPayload['stickyFooterConfig']) ? $footerPayload['stickyFooterConfig'] : $footerPayload;
+    $nowTs = time() * 1000;
+    
+    $currentData['stickyFooterConfig'] = $footer;
+    $currentData['lastUpdated'] = $nowTs;
+    
+    $jsonStr = json_encode($currentData, JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
+    @file_put_contents($dataFile1, $jsonStr);
+    @file_put_contents($dataFile2, $jsonStr);
+    
+    $savedToDb = false;
+    if ($pdo) {
+        try {
+            $stmt = $pdo->prepare("INSERT INTO site_settings (setting_key, setting_value) VALUES ('site_data', ?) ON DUPLICATE KEY UPDATE setting_value = VALUES(setting_value), updated_at = CURRENT_TIMESTAMP");
+            if ($stmt && $stmt->execute([json_encode($currentData, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES)])) {
+                $savedToDb = true;
+            }
+        } catch (Throwable $e) {}
+    }
+    
+    echo json_encode([
+        'success' => true,
+        'message' => 'Konfigurasi menu bawah berhasil disimpan.',
+        'lastUpdated' => $nowTs,
+        'savedToDb' => $savedToDb
+    ]);
+    exit;
+}
+`;
+};
+
+export const generateApiSyncToMysqlPhp = (): string => {
+  return `<?php
+/**
+ * API Handler: Paksa Sinkronisasi Semua Data ke MySQL & JSON
+ */
+@ini_set('display_errors', '0');
+error_reporting(0);
+
+header('Content-Type: application/json; charset=utf-8');
+header('Access-Control-Allow-Origin: *');
+header('Access-Control-Allow-Methods: POST, OPTIONS');
+header('Access-Control-Allow-Headers: Content-Type, Authorization');
+
+if ($_SERVER['REQUEST_METHOD'] === 'OPTIONS') {
+    http_response_code(200);
+    exit;
+}
+
+require_once __DIR__ . '/../db_config.php';
+$dataFile1 = __DIR__ . '/../data/persisted_site_data.json';
+$dataFile2 = __DIR__ . '/../data/site_data.json';
+
+$pdo = getDbConnection();
+
+$raw = @file_get_contents('php://input');
+$payload = @json_decode($raw, true);
+
+$currentData = [];
+if ($payload && is_array($payload) && (!empty($payload['siteContent']) || !empty($payload['logoConfig']))) {
+    $currentData = $payload;
+} else {
+    if (file_exists($dataFile1)) $currentData = @json_decode(@file_get_contents($dataFile1), true) ?: [];
+    elseif (file_exists($dataFile2)) $currentData = @json_decode(@file_get_contents($dataFile2), true) ?: [];
+}
+
+$nowTs = time() * 1000;
+$currentData['lastUpdated'] = $nowTs;
+
+// Proteksi OOM: Konversi Base64 string menjadi berkas fisik di uploads/
+$convertBase64ToFiles = function(&$item, $uploadsDir) use (&$convertBase64ToFiles) {
+    if (!is_array($item)) return;
+    foreach ($item as $k => &$v) {
+        if (is_string($v) && preg_match('/^data:image\/([a-zA-Z0-9\+\-]+);base64,(.+)$/s', $v, $matches)) {
+            $ext = strtolower($matches[1]);
+            if ($ext === 'jpeg') $ext = 'jpg';
+            if ($ext === 'svg+xml') $ext = 'svg';
+            $bin = base64_decode($matches[2]);
+            if ($bin !== false && strlen($bin) > 0) {
+                $hash = substr(md5($bin), 0, 10);
+                $fn = 'img_' . time() . '_' . $hash . '.' . $ext;
+                if (!is_dir($uploadsDir)) @mkdir($uploadsDir, 0755, true);
+                @file_put_contents($uploadsDir . '/' . $fn, $bin);
+                $v = '/uploads/' . $fn;
+            }
+        } elseif (is_array($v)) {
+            $convertBase64ToFiles($v, $uploadsDir);
+        }
+    }
+};
+$convertBase64ToFiles($currentData, __DIR__ . '/../uploads');
+
+$jsonStr = json_encode($currentData, JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
+@file_put_contents($dataFile1, $jsonStr);
+@file_put_contents($dataFile2, $jsonStr);
+
+$savedToDb = false;
+$errorMsg = null;
+
+if ($pdo) {
+    try {
+        $stmt = $pdo->prepare("INSERT INTO site_settings (setting_key, setting_value) VALUES ('site_data', ?) ON DUPLICATE KEY UPDATE setting_value = VALUES(setting_value), updated_at = CURRENT_TIMESTAMP");
+        if ($stmt && $stmt->execute([json_encode($currentData, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES)])) {
+            $savedToDb = true;
+        }
+    } catch (Throwable $e) {
+        $errorMsg = $e->getMessage();
+    }
+}
+
+echo json_encode([
+    'success' => true,
+    'savedToDb' => $savedToDb,
+    'isMySQLConnected' => $pdo ? true : false,
+    'lastUpdated' => $nowTs,
+    'storageEngine' => $savedToDb ? 'MySQL Plesk' : 'File JSON',
+    'message' => $savedToDb
+        ? 'Data berhasil disinkronkan ke Database MySQL Plesk dan File JSON!'
+        : 'Data tersimpan di File JSON server. ' . ($errorMsg ? 'MySQL: ' . $errorMsg : 'MySQL belum terhubung.')
+]);
+exit;
+`;
+};
+
+export const generateOgImagePhp = (): string => {
+  return `<?php
+/**
+ * Dynamic Open Graph / WhatsApp Thumbnail Delivery
+ * Menjamin gambar thumbnail yang dibagikan selalu yang paling mutakhir (anti-cache)
+ */
+@ini_set('display_errors', '0');
+error_reporting(0);
+
+// Disable caching by browsers, proxies, and social media scrapers
+header('Cache-Control: no-cache, no-store, must-revalidate, max-age=0');
+header('Pragma: no-cache');
+header('Expires: 0');
+
+require_once __DIR__ . '/db_config.php';
+$dataFile1 = __DIR__ . '/data/persisted_site_data.json';
+$dataFile2 = __DIR__ . '/data/site_data.json';
+
+$pdo = getDbConnection();
+$siteData = null;
+
+if ($pdo) {
+    try {
+        $stmt = $pdo->query("SELECT setting_value FROM site_settings WHERE setting_key = 'site_data' LIMIT 1");
+        if ($stmt) {
+            $row = $stmt->fetch();
+            if (!empty($row['setting_value'])) {
+                $siteData = @json_decode($row['setting_value'], true);
+            }
+        }
+    } catch (Throwable $e) {}
+}
+
+if (!$siteData && file_exists($dataFile1)) {
+    $siteData = @json_decode(@file_get_contents($dataFile1), true);
+}
+if (!$siteData && file_exists($dataFile2)) {
+    $siteData = @json_decode(@file_get_contents($dataFile2), true);
+}
+
+$thumbUrl = $siteData['siteContent']['shareSettings']['thumbnailUrl'] 
+    ?? ($siteData['siteContent']['profile']['avatarUrl'] ?? '');
+
+$imageFile = '';
+
+// Jika thumbUrl adalah path lokal (misal: /uploads/thumbnail_....jpg)
+if (!empty($thumbUrl) && !preg_match('/^https?:\\/\\//i', $thumbUrl)) {
+    $cleanPath = ltrim(parse_url($thumbUrl, PHP_URL_PATH), '/');
+    if (file_exists(__DIR__ . '/' . $cleanPath) && is_file(__DIR__ . '/' . $cleanPath)) {
+        $imageFile = __DIR__ . '/' . $cleanPath;
+    }
+}
+
+// Fallback jika belum ditemukan file fisik
+if (empty($imageFile) || !file_exists($imageFile)) {
+    if (file_exists(__DIR__ . '/og-image.jpg')) {
+        $imageFile = __DIR__ . '/og-image.jpg';
+    } elseif (file_exists(__DIR__ . '/thumbnail.jpg')) {
+        $imageFile = __DIR__ . '/thumbnail.jpg';
+    } elseif (file_exists(__DIR__ . '/data/persisted_og_image.jpg')) {
+        $imageFile = __DIR__ . '/data/persisted_og_image.jpg';
+    } elseif (file_exists(__DIR__ . '/avatar-jaenal.jpg')) {
+        $imageFile = __DIR__ . '/avatar-jaenal.jpg';
+    }
+}
+
+if (!empty($imageFile) && file_exists($imageFile)) {
+    $mime = 'image/jpeg';
+    $ext = strtolower(pathinfo($imageFile, PATHINFO_EXTENSION));
+    if ($ext === 'png') $mime = 'image/png';
+    elseif ($ext === 'webp') $mime = 'image/webp';
+    elseif ($ext === 'gif') $mime = 'image/gif';
+    
+    header('Content-Type: ' . $mime);
+    header('Content-Length: ' . filesize($imageFile));
+    @readfile($imageFile);
+    exit;
+}
+
+header('Content-Type: image/jpeg');
+exit;
+`;
+};
+
+export const generateApiShareSettingsPhp = (): string => {
+  return `<?php
+/**
+ * API Handler: Simpan Pengaturan Bagikan (Open Graph / Thumbnail)
+ */
+@ini_set('display_errors', '0');
+error_reporting(0);
+
+header('Content-Type: application/json; charset=utf-8');
+header('Access-Control-Allow-Origin: *');
+header('Access-Control-Allow-Methods: POST, OPTIONS');
+header('Access-Control-Allow-Headers: Content-Type, Authorization');
+
+if ($_SERVER['REQUEST_METHOD'] === 'OPTIONS') {
+    http_response_code(200);
+    exit;
+}
+
+require_once __DIR__ . '/../db_config.php';
+$dataFile1 = __DIR__ . '/../data/persisted_site_data.json';
+$dataFile2 = __DIR__ . '/../data/site_data.json';
+
+$pdo = getDbConnection();
+
+$currentData = [];
+if ($pdo) {
+    try {
+        $stmt = $pdo->query("SELECT setting_value FROM site_settings WHERE setting_key = 'site_data' LIMIT 1");
+        if ($stmt) {
+            $row = $stmt->fetch();
+            if (!empty($row['setting_value'])) {
+                $currentData = @json_decode($row['setting_value'], true) ?: [];
+            }
+        }
+    } catch (Throwable $e) {}
+}
+if (empty($currentData)) {
+    if (file_exists($dataFile1)) $currentData = @json_decode(@file_get_contents($dataFile1), true) ?: [];
+    elseif (file_exists($dataFile2)) $currentData = @json_decode(@file_get_contents($dataFile2), true) ?: [];
+}
+
+$raw = @file_get_contents('php://input');
+$input = @json_decode($raw, true);
+$share = isset($input['shareSettings']) ? $input['shareSettings'] : $input;
+
+// Jika thumbnailUrl dikirim berupa data base64
+if (!empty($share['thumbnailUrl']) && strpos($share['thumbnailUrl'], 'data:image/') === 0) {
+    $dataUri = $share['thumbnailUrl'];
+    $ext = 'jpg';
+    if (preg_match('/^data:image\\/([a-zA-Z0-9\\+\\.-]+);base64,/', $dataUri, $matches)) {
+        $mime = strtolower($matches[1]);
+        if (strpos($mime, 'png') !== false) $ext = 'png';
+        elseif (strpos($mime, 'webp') !== false) $ext = 'webp';
+        $base64 = substr($dataUri, strpos($dataUri, ',') + 1);
+    } else {
+        $base64 = $dataUri;
+    }
+    $binary = base64_decode($base64);
+    if ($binary) {
+        $uploadsDir = __DIR__ . '/../uploads';
+        if (!is_dir($uploadsDir)) @mkdir($uploadsDir, 0777, true);
+        $filename = 'thumbnail_' . time() . '.' . $ext;
+        @file_put_contents($uploadsDir . '/' . $filename, $binary);
+        @file_put_contents(__DIR__ . '/../og-image.jpg', $binary);
+        @file_put_contents(__DIR__ . '/../thumbnail.jpg', $binary);
+        @file_put_contents(__DIR__ . '/../og-preview.jpg', $binary);
+        @file_put_contents(__DIR__ . '/../data/persisted_og_image.jpg', $binary);
+        if (is_dir(__DIR__ . '/../dist')) {
+            @file_put_contents(__DIR__ . '/../dist/og-image.jpg', $binary);
+            @file_put_contents(__DIR__ . '/../dist/thumbnail.jpg', $binary);
+        }
+        $share['thumbnailUrl'] = '/uploads/' . $filename;
+    }
+} elseif (!empty($share['thumbnailUrl']) && !preg_match('/^https?:\\/\\//i', $share['thumbnailUrl'])) {
+    $cleanPath = ltrim(parse_url($share['thumbnailUrl'], PHP_URL_PATH), '/');
+    $localFile = __DIR__ . '/../' . $cleanPath;
+    if (file_exists($localFile) && is_file($localFile)) {
+        $binary = @file_get_contents($localFile);
+        if ($binary) {
+            @file_put_contents(__DIR__ . '/../og-image.jpg', $binary);
+            @file_put_contents(__DIR__ . '/../thumbnail.jpg', $binary);
+            @file_put_contents(__DIR__ . '/../og-preview.jpg', $binary);
+            @file_put_contents(__DIR__ . '/../data/persisted_og_image.jpg', $binary);
+        }
+    }
+}
+
+if (!isset($currentData['siteContent'])) $currentData['siteContent'] = [];
+$currentData['siteContent']['shareSettings'] = array_merge($currentData['siteContent']['shareSettings'] ?? [], $share ?: []);
+$nowTs = time() * 1000;
+$currentData['lastUpdated'] = $nowTs;
+
+$jsonStr = json_encode($currentData, JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
+@file_put_contents($dataFile1, $jsonStr);
+@file_put_contents($dataFile2, $jsonStr);
+
+$savedToDb = false;
+if ($pdo) {
+    try {
+        $stmt = $pdo->prepare("INSERT INTO site_settings (setting_key, setting_value) VALUES ('site_data', ?) ON DUPLICATE KEY UPDATE setting_value = VALUES(setting_value), updated_at = CURRENT_TIMESTAMP");
+        if ($stmt && $stmt->execute([json_encode($currentData, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES)])) {
+            $savedToDb = true;
+        }
+    } catch (Throwable $e) {}
+}
+
+echo json_encode([
+    'success' => true,
+    'shareSettings' => $currentData['siteContent']['shareSettings'],
+    'lastUpdated' => $nowTs,
+    'savedToDb' => $savedToDb,
+    'message' => 'Pengaturan share dan meta tags berhasil disimpan.'
+]);
+exit;
+`;
+};
+
+export const generateApiUploadThumbnailPhp = (): string => {
+  return `<?php
+/**
+ * API Handler: Unggah Thumbnail Khusus Berbagi Link & Media Sosial
+ */
+@ini_set('display_errors', '0');
+error_reporting(0);
+
+header('Content-Type: application/json; charset=utf-8');
+header('Access-Control-Allow-Origin: *');
+header('Access-Control-Allow-Methods: POST, OPTIONS');
+header('Access-Control-Allow-Headers: Content-Type, Authorization');
+
+if ($_SERVER['REQUEST_METHOD'] === 'OPTIONS') {
+    http_response_code(200);
+    exit;
+}
+
+$uploadsDir = __DIR__ . '/../uploads';
+if (!is_dir($uploadsDir)) {
+    @mkdir($uploadsDir, 0755, true);
+}
+
+$raw = @file_get_contents('php://input');
+$input = @json_decode($raw, true);
+
+if (!$input || empty($input['image'])) {
+    http_response_code(400);
+    echo json_encode(['success' => false, 'error' => 'Gambar thumbnail tidak valid']);
+    exit;
+}
+
+$dataUri = $input['image'];
+$url = $dataUri;
+
+if (strpos($dataUri, 'data:image/') === 0) {
+    $ext = 'jpg';
+    if (preg_match('/^data:image\\/([a-zA-Z0-9\\+\\.-]+);base64,/', $dataUri, $matches)) {
+        $mime = strtolower($matches[1]);
+        if (strpos($mime, 'png') !== false) $ext = 'png';
+        elseif (strpos($mime, 'webp') !== false) $ext = 'webp';
+        $base64 = substr($dataUri, strpos($dataUri, ',') + 1);
+    } else {
+        $base64 = $dataUri;
+    }
+    
+    $binary = base64_decode($base64);
+    if ($binary) {
+        $filename = 'thumbnail_' . time() . '.' . $ext;
+        $targetPath = $uploadsDir . '/' . $filename;
+        @file_put_contents($targetPath, $binary);
+        @file_put_contents(__DIR__ . '/../og-image.jpg', $binary);
+        @file_put_contents(__DIR__ . '/../thumbnail.jpg', $binary);
+        @file_put_contents(__DIR__ . '/../og-preview.jpg', $binary);
+        @file_put_contents(__DIR__ . '/../data/persisted_og_image.jpg', $binary);
+        if (is_dir(__DIR__ . '/../dist')) {
+            @file_put_contents(__DIR__ . '/../dist/og-image.jpg', $binary);
+            @file_put_contents(__DIR__ . '/../dist/thumbnail.jpg', $binary);
+        }
+        $url = '/uploads/' . $filename;
+    }
+}
+
+require_once __DIR__ . '/../db_config.php';
+$dataFile1 = __DIR__ . '/../data/persisted_site_data.json';
+$dataFile2 = __DIR__ . '/../data/site_data.json';
+
+$pdo = getDbConnection();
+$currentData = [];
+if ($pdo) {
+    try {
+        $stmt = $pdo->query("SELECT setting_value FROM site_settings WHERE setting_key = 'site_data' LIMIT 1");
+        if ($stmt) {
+            $row = $stmt->fetch();
+            if (!empty($row['setting_value'])) {
+                $currentData = @json_decode($row['setting_value'], true) ?: [];
+            }
+        }
+    } catch (Throwable $e) {}
+}
+if (empty($currentData)) {
+    if (file_exists($dataFile1)) $currentData = @json_decode(@file_get_contents($dataFile1), true) ?: [];
+    elseif (file_exists($dataFile2)) $currentData = @json_decode(@file_get_contents($dataFile2), true) ?: [];
+}
+
+if (!isset($currentData['siteContent'])) $currentData['siteContent'] = [];
+if (!isset($currentData['siteContent']['shareSettings'])) $currentData['siteContent']['shareSettings'] = [];
+$currentData['siteContent']['shareSettings']['thumbnailUrl'] = $url;
+$currentData['lastUpdated'] = time() * 1000;
+
+$jsonStr = json_encode($currentData, JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
+@file_put_contents($dataFile1, $jsonStr);
+@file_put_contents($dataFile2, $jsonStr);
+
+if ($pdo) {
+    try {
+        $stmt = $pdo->prepare("INSERT INTO site_settings (setting_key, setting_value) VALUES ('site_data', ?) ON DUPLICATE KEY UPDATE setting_value = VALUES(setting_value), updated_at = CURRENT_TIMESTAMP");
+        if ($stmt) $stmt->execute([json_encode($currentData, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES)]);
+    } catch (Throwable $e) {}
+}
+
+echo json_encode([
+    'success' => true,
+    'url' => $url,
+    'ogImage' => '/og-image.jpg?v=' . time(),
+    'message' => 'Thumbnail berhasil diunggah dan disimpan.'
+]);
+exit;
+`;
+};
+
+export const generateApiSyncStatusPhp = (): string => {
+  return `<?php
+/**
+ * API Handler: Real-Time Sync Status Checker
+ */
+@ini_set('display_errors', '0');
+error_reporting(0);
+
+header('Content-Type: application/json; charset=utf-8');
+header('Access-Control-Allow-Origin: *');
+
+require_once __DIR__ . '/../db_config.php';
+$dataFile1 = __DIR__ . '/../data/persisted_site_data.json';
+$dataFile2 = __DIR__ . '/../data/site_data.json';
+
+$pdo = getDbConnection();
+$lastUpdated = time() * 1000;
+$hasData = false;
+
+if ($pdo) {
+    try {
+        $stmt = $pdo->query("SELECT UNIX_TIMESTAMP(updated_at)*1000 as last_up FROM site_settings WHERE setting_key = 'site_data' LIMIT 1");
+        if ($stmt) {
+            $row = $stmt->fetch();
+            if ($row && !empty($row['last_up'])) {
+                $lastUpdated = (int)$row['last_up'];
+                $hasData = true;
+            }
+        }
+    } catch (Throwable $e) {} catch (Exception $e) {}
+}
+
+if (!$hasData) {
+    if (file_exists($dataFile1)) {
+        $lastUpdated = (int)(filemtime($dataFile1) * 1000);
+        $hasData = true;
+    } elseif (file_exists($dataFile2)) {
+        $lastUpdated = (int)(filemtime($dataFile2) * 1000);
+        $hasData = true;
+    }
+}
+
+echo json_encode([
+    'success' => true,
+    'lastUpdated' => $lastUpdated,
+    'hasData' => $hasData,
+    'mysqlActive' => $pdo ? true : false,
+    'storageEngine' => $pdo ? 'mysql' : 'file'
+]);
+exit;
+`;
+};
+
+export const generateApiUploadImagePhp = (): string => {
+  return `<?php
+/**
+ * API Handler: Unggah Gambar (Avatar, Hero, Logo, Galeri)
+ */
+@ini_set('display_errors', '0');
+error_reporting(0);
+
+header('Content-Type: application/json; charset=utf-8');
+header('Access-Control-Allow-Origin: *');
+header('Access-Control-Allow-Methods: POST, OPTIONS');
+header('Access-Control-Allow-Headers: Content-Type, Authorization');
+
+if ($_SERVER['REQUEST_METHOD'] === 'OPTIONS') {
+    http_response_code(200);
+    exit;
+}
+
+$uploadsDir = __DIR__ . '/../uploads';
+if (!is_dir($uploadsDir)) {
+    @mkdir($uploadsDir, 0755, true);
+}
+
+$raw = @file_get_contents('php://input');
+$input = @json_decode($raw, true);
+
+if (!$input || empty($input['image'])) {
+    http_response_code(400);
+    echo json_encode(['success' => false, 'error' => 'Gambar tidak valid']);
+    exit;
+}
+
+$dataUri = $input['image'];
+$type = $input['type'] ?? 'img';
+$ext = 'jpg';
+
+if (preg_match('/^data:image\\/([a-zA-Z0-9\\+\\.-]+);base64,/', $dataUri, $matches)) {
+    $mime = strtolower($matches[1]);
+    if (strpos($mime, 'png') !== false) $ext = 'png';
+    elseif (strpos($mime, 'webp') !== false) $ext = 'webp';
+    elseif (strpos($mime, 'gif') !== false) $ext = 'gif';
+    elseif (strpos($mime, 'svg') !== false) $ext = 'svg';
+    elseif (strpos($mime, 'icon') !== false || strpos($mime, 'ico') !== false) $ext = 'ico';
+    $base64 = substr($dataUri, strpos($dataUri, ',') + 1);
+} else {
+    $base64 = $dataUri;
+}
+
+$binary = base64_decode($base64);
+if (!$binary) {
+    http_response_code(400);
+    echo json_encode(['success' => false, 'error' => 'Gagal mendekode gambar base64']);
+    exit;
+}
+
+$filename = $type . '_' . time() . '_' . substr(md5(uniqid()), 0, 6) . '.' . $ext;
+$targetPath = $uploadsDir . '/' . $filename;
+
+if (@file_put_contents($targetPath, $binary)) {
+    $url = '/uploads/' . $filename;
+    echo json_encode([
+        'success' => true,
+        'url' => $url,
+        'filename' => $filename,
+        'message' => 'Gambar berhasil diunggah'
+    ]);
+} else {
+    http_response_code(500);
+    echo json_encode(['success' => false, 'error' => 'Gagal menyimpan berkas ke folder uploads/']);
+}
+exit;
+`;
+};
+
+export const generateApiUploadVideoChunkPhp = (): string => {
+  return `<?php
+/**
+ * API Handler: Unggah Potongan Video Berkualitas Tinggi (Chunked Video Upload)
+ * Mendukung berkas besar, otomatis dirakit, siap diputar di browser & HP.
+ */
+@ini_set('display_errors', '0');
+@ini_set('memory_limit', '512M');
+@ini_set('max_execution_time', '300');
+error_reporting(0);
+
+header('Content-Type: application/json; charset=utf-8');
+header('Access-Control-Allow-Origin: *');
+header('Access-Control-Allow-Methods: POST, OPTIONS, GET');
+header('Access-Control-Allow-Headers: Content-Type, Authorization, X-Upload-Id, X-Chunk-Index, X-Total-Chunks, X-Filename, X-Title, X-Duration, X-Width, X-Height, X-Thumbnail');
+
+if ($_SERVER['REQUEST_METHOD'] === 'OPTIONS') {
+    http_response_code(200);
+    exit;
+}
+
+$uploadsDir = __DIR__ . '/../uploads';
+$tempDir = __DIR__ . '/../data/temp_video_chunks';
+if (!is_dir($uploadsDir)) @mkdir($uploadsDir, 0755, true);
+if (!is_dir($tempDir)) @mkdir($tempDir, 0755, true);
+
+$uploadId = $_GET['uploadId'] ?? $_SERVER['HTTP_X_UPLOAD_ID'] ?? '';
+$chunkIndex = intval($_GET['chunkIndex'] ?? $_SERVER['HTTP_X_CHUNK_INDEX'] ?? 0);
+$totalChunks = intval($_GET['totalChunks'] ?? $_SERVER['HTTP_X_TOTAL_CHUNKS'] ?? 1);
+$filename = $_GET['filename'] ?? (isset($_SERVER['HTTP_X_FILENAME']) ? urldecode($_SERVER['HTTP_X_FILENAME']) : 'video.mp4');
+$title = $_GET['title'] ?? (isset($_SERVER['HTTP_X_TITLE']) ? urldecode($_SERVER['HTTP_X_TITLE']) : '');
+$thumbnail = $_GET['thumbnail'] ?? $_SERVER['HTTP_X_THUMBNAIL'] ?? '';
+
+if (empty($uploadId)) {
+    $uploadId = 'upl_' . time() . '_' . substr(md5(uniqid()), 0, 6);
+}
+
+$cleanUploadId = preg_replace('/[^a-zA-Z0-9_-]/', '_', $uploadId);
+$chunkFile = $tempDir . '/' . $cleanUploadId . '_' . $chunkIndex . '.part';
+
+$rawChunk = file_get_contents('php://input');
+if ($rawChunk === false || strlen($rawChunk) === 0) {
+    // Coba periksa jika dikirim melalui standard $_FILES
+    if (isset($_FILES['chunk']) && isset($_FILES['chunk']['tmp_name'])) {
+        move_uploaded_file($_FILES['chunk']['tmp_name'], $chunkFile);
+    } else {
+        http_response_code(400);
+        echo json_encode(['success' => false, 'error' => 'Data chunk video kosong']);
+        exit;
+    }
+} else {
+    file_put_contents($chunkFile, $rawChunk);
+}
+
+// Jika belum potongan terakhir, kirim status sukses chunk
+if ($chunkIndex + 1 < $totalChunks) {
+    echo json_encode([
+        'success' => true,
+        'status' => 'chunk_received',
+        'chunkIndex' => $chunkIndex,
+        'totalChunks' => $totalChunks,
+        'message' => 'Potongan video ' . ($chunkIndex + 1) . ' dari ' . $totalChunks . ' tersimpan.'
+    ]);
+    exit;
+}
+
+// Potongan terakhir diterima -> Gabungkan semua chunk menjadi satu berkas video utuh
+$ext = strtolower(pathinfo($filename, PATHINFO_EXTENSION)) ?: 'mp4';
+$cleanOriginal = preg_replace('/[^a-zA-Z0-9_-]/', '_', pathinfo($filename, PATHINFO_FILENAME));
+$safeFilename = 'video_' . time() . '_' . $cleanOriginal . '.' . $ext;
+$targetFile = $uploadsDir . '/' . $safeFilename;
+
+$finalHandle = @fopen($targetFile, 'wb');
+if (!$finalHandle) {
+    http_response_code(500);
+    echo json_encode(['success' => false, 'error' => 'Gagal membuka file target untuk menggabungkan video']);
+    exit;
+}
+
+$totalBytes = 0;
+for ($i = 0; $i < $totalChunks; $i++) {
+    $partPath = $tempDir . '/' . $cleanUploadId . '_' . $i . '.part';
+    if (file_exists($partPath)) {
+        $partHandle = @fopen($partPath, 'rb');
+        if ($partHandle) {
+            while (!feof($partHandle)) {
+                $buf = fread($partHandle, 1048576);
+                $totalBytes += strlen($buf);
+                fwrite($finalHandle, $buf);
+            }
+            fclose($partHandle);
+        }
+        @unlink($partPath);
+    }
+}
+fclose($finalHandle);
+
+$url = '/uploads/' . $safeFilename;
+echo json_encode([
+    'success' => true,
+    'status' => 'completed',
+    'url' => $url,
+    'filename' => $filename,
+    'fileSize' => round($totalBytes / (1024 * 1024), 2) . ' MB',
+    'thumbnail' => $thumbnail,
+    'message' => 'Berkas video berhasil dirakit dan siap diputar di Kapsul Ajaib HP.'
+]);
+exit;
+`;
+};
+
+export const generateApiUploadVideoPhp = (): string => {
+  return `<?php
+/**
+ * API Handler: Unggah Video Standar (Direct/Multipart Form Data)
+ */
+@ini_set('display_errors', '0');
+@ini_set('memory_limit', '512M');
+@ini_set('max_execution_time', '300');
+error_reporting(0);
+
+header('Content-Type: application/json; charset=utf-8');
+header('Access-Control-Allow-Origin: *');
+header('Access-Control-Allow-Methods: POST, OPTIONS');
+header('Access-Control-Allow-Headers: Content-Type, Authorization');
+
+if ($_SERVER['REQUEST_METHOD'] === 'OPTIONS') {
+    http_response_code(200);
+    exit;
+}
+
+$uploadsDir = __DIR__ . '/../uploads';
+if (!is_dir($uploadsDir)) @mkdir($uploadsDir, 0755, true);
+
+if (isset($_FILES['video']) && is_uploaded_file($_FILES['video']['tmp_name'])) {
+    $origName = $_FILES['video']['name'];
+    $ext = strtolower(pathinfo($origName, PATHINFO_EXTENSION)) ?: 'mp4';
+    $cleanOriginal = preg_replace('/[^a-zA-Z0-9_-]/', '_', pathinfo($origName, PATHINFO_FILENAME));
+    $safeFilename = 'video_' . time() . '_' . $cleanOriginal . '.' . $ext;
+    $targetPath = $uploadsDir . '/' . $safeFilename;
+
+    if (move_uploaded_file($_FILES['video']['tmp_name'], $targetPath)) {
+        echo json_encode([
+            'success' => true,
+            'url' => '/uploads/' . $safeFilename,
+            'filename' => $origName,
+            'fileSize' => round($_FILES['video']['size'] / (1024 * 1024), 2) . ' MB',
+            'message' => 'Video berhasil diunggah'
+        ]);
+        exit;
+    }
+}
+
+http_response_code(400);
+echo json_encode(['success' => false, 'error' => 'Berkas video tidak ditemukan']);
+exit;
+`;
+};
+
+export const generateApiAdminLoginPhp = (): string => {
+  return `<?php
+/**
+ * API Handler: Login Super Admin
+ */
+@ini_set('display_errors', '0');
+error_reporting(0);
+
+header('Content-Type: application/json; charset=utf-8');
+header('Access-Control-Allow-Origin: *');
+header('Access-Control-Allow-Methods: POST, OPTIONS');
+header('Access-Control-Allow-Headers: Content-Type, Authorization');
+
+if ($_SERVER['REQUEST_METHOD'] === 'OPTIONS') {
+    http_response_code(200);
+    exit;
+}
+
+$raw = @file_get_contents('php://input');
+$input = @json_decode($raw, true);
+
+$password = trim($input['password'] ?? '');
+$validPasswords = ['masbagus', 'masbagus15', 'madrasah123', 'admin123'];
+
+if (in_array($password, $validPasswords)) {
+    $token = 'adm_' . time() . '_' . md5(uniqid());
+    echo json_encode([
+        'success' => true,
+        'token' => $token,
+        'user' => [
+            'name' => 'Ust. Jaenal Maskun, S.Pd.I.',
+            'email' => 'jaenalmaskun@gmail.com',
+            'role' => 'Super Administrator'
+        ],
+        'message' => 'Login berhasil'
+    ]);
+} else {
+    http_response_code(401);
+    echo json_encode(['success' => false, 'error' => 'Kata sandi salah. Silakan periksa kembali kata sandi admin Anda.']);
+}
+exit;
+`;
+};
+
+export const generateApiMessagesPhp = (): string => {
+  return `<?php
+/**
+ * API Handler: Kirim dan Muat Pesan Silaturahmi (Plesk MySQL / JSON)
+ */
+@ini_set('display_errors', '0');
+error_reporting(0);
+
+header('Content-Type: application/json; charset=utf-8');
+header('Access-Control-Allow-Origin: *');
+header('Access-Control-Allow-Methods: GET, POST, OPTIONS');
+header('Access-Control-Allow-Headers: Content-Type, Authorization');
+
+if ($_SERVER['REQUEST_METHOD'] === 'OPTIONS') {
+    http_response_code(200);
+    exit;
+}
+
+require_once __DIR__ . '/../db_config.php';
+$dataFile = __DIR__ . '/../data/messages.json';
+
+if (!is_dir(__DIR__ . '/../data')) {
+    @mkdir(__DIR__ . '/../data', 0755, true);
+}
+
+$pdo = getDbConnection();
+
+if ($_SERVER['REQUEST_METHOD'] === 'GET') {
+    $messages = [];
+    if ($pdo) {
+        try {
+            $stmt = $pdo->query("SELECT * FROM messages ORDER BY id DESC");
+            if ($stmt) {
+                $rows = $stmt->fetchAll();
+                if ($rows && is_array($rows)) {
+                    foreach ($rows as $r) {
+                        $messages[] = [
+                            'id' => (string)$r['id'],
+                            'name' => $r['sender_name'] ?? $r['name'] ?? '',
+                            'institution' => $r['institution'] ?? '',
+                            'email' => $r['email'] ?? '',
+                            'phone' => $r['phone'] ?? '',
+                            'type' => $r['event_type'] ?? 'Silaturahmi',
+                            'date' => $r['event_date'] ?? date('d M Y'),
+                            'message' => $r['message'] ?? '',
+                            'isRead' => (bool)($r['is_read'] ?? 0)
+                        ];
+                    }
+                }
+            }
+        } catch (Throwable $e) {} catch (Exception $e) {}
+    }
+    
+    if (empty($messages) && file_exists($dataFile)) {
+        $messages = @json_decode(@file_get_contents($dataFile), true) ?: [];
+    }
+    
+    echo json_encode(['success' => true, 'messages' => $messages, 'count' => count($messages)]);
+    exit;
+}
+
+if ($_SERVER['REQUEST_METHOD'] === 'POST') {
+    $raw = @file_get_contents('php://input');
+    $input = @json_decode($raw, true);
+    
+    if (!$input || empty($input['message'])) {
+        http_response_code(400);
+        echo json_encode(['success' => false, 'error' => 'Pesan tidak boleh kosong']);
+        exit;
+    }
+    
+    $name = trim($input['name'] ?? $input['sender'] ?? 'Tamu Silaturahmi');
+    $inst = trim($input['institution'] ?? '');
+    $email = trim($input['email'] ?? '');
+    $phone = trim($input['phone'] ?? '');
+    $type = trim($input['type'] ?? $input['eventType'] ?? 'Silaturahmi');
+    $date = trim($input['date'] ?? $input['eventDate'] ?? date('d F Y'));
+    $msg = trim($input['message'] ?? '');
+    
+    $savedToDb = false;
+    if ($pdo) {
+        try {
+            $stmt = $pdo->prepare("INSERT INTO messages (sender_name, institution, email, phone, event_type, event_date, message, is_read) VALUES (?, ?, ?, ?, ?, ?, ?, 0)");
+            if ($stmt && $stmt->execute([$name, $inst, $email, $phone, $type, $date, $msg])) {
+                $savedToDb = true;
+            }
+        } catch (Throwable $e) {
+            error_log("Gagal simpan ke MySQL: " . $e->getMessage());
+        } catch (Exception $e) {}
+    }
+    
+    // Backup ke file JSON
+    $existing = file_exists($dataFile) ? @json_decode(@file_get_contents($dataFile), true) ?: [] : [];
+    array_unshift($existing, [
+        'id' => 'msg-' . time(),
+        'name' => $name,
+        'institution' => $inst,
+        'email' => $email,
+        'phone' => $phone,
+        'type' => $type,
+        'date' => $date,
+        'message' => $msg,
+        'isRead' => false,
+        'createdAt' => date('c')
+    ]);
+    @file_put_contents($dataFile, json_encode($existing, JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE));
+    
+    echo json_encode(['success' => true, 'message' => 'Pesan Anda berhasil terkirim dan tersimpan!', 'savedToDb' => $savedToDb]);
+    exit;
+}
+`;
+};
+
+export const generateApiSettingsPhp = (): string => {
+  return `<?php
+/**
+ * API Handler: Simpan dan Sinkronisasi Pengaturan Website (Plesk MySQL / JSON)
+ */
+@ini_set('display_errors', '0');
+error_reporting(0);
+
+header('Content-Type: application/json; charset=utf-8');
+header('Access-Control-Allow-Origin: *');
+header('Access-Control-Allow-Methods: GET, POST, OPTIONS');
+header('Access-Control-Allow-Headers: Content-Type, Authorization');
+
+if ($_SERVER['REQUEST_METHOD'] === 'OPTIONS') {
+    http_response_code(200);
+    exit;
+}
+
+require_once __DIR__ . '/../db_config.php';
+$dataFile = __DIR__ . '/../data/site_data.json';
+
+if (!is_dir(__DIR__ . '/../data')) {
+    @mkdir(__DIR__ . '/../data', 0755, true);
+}
+
+$pdo = getDbConnection();
+
+if ($_SERVER['REQUEST_METHOD'] === 'GET') {
+    $data = null;
+    if ($pdo) {
+        try {
+            $stmt = $pdo->prepare("SELECT setting_value FROM site_settings WHERE setting_key = 'site_data' LIMIT 1");
+            if ($stmt && $stmt->execute()) {
+                $row = $stmt->fetch();
+                if ($row && !empty($row['setting_value'])) {
+                    $data = @json_decode($row['setting_value'], true);
+                }
+            }
+        } catch (Throwable $e) {} catch (Exception $e) {}
+    }
+    
+    if (!$data && file_exists($dataFile)) {
+        $data = @json_decode(@file_get_contents($dataFile), true);
+    }
+    
+    echo json_encode([
+        'success' => true,
+        'data' => $data,
+        'storageEngine' => $pdo ? 'MySQL Plesk' : 'File JSON'
+    ]);
+    exit;
+}
+
+if ($_SERVER['REQUEST_METHOD'] === 'POST') {
+    $raw = @file_get_contents('php://input');
+    $payload = @json_decode($raw, true);
+    
+    if (!$payload) {
+        http_response_code(400);
+        echo json_encode(['success' => false, 'error' => 'Data tidak valid']);
+        exit;
+    }
+    
+    // Simpan ke file JSON
+    @file_put_contents($dataFile, json_encode($payload, JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE));
+    
+    // Simpan ke MySQL
+    $savedToDb = false;
+    if ($pdo) {
+        try {
+            $jsonStr = json_encode($payload, JSON_UNESCAPED_UNICODE);
+            $stmt = $pdo->prepare("INSERT INTO site_settings (setting_key, setting_value) VALUES ('site_data', ?) ON DUPLICATE KEY UPDATE setting_value = VALUES(setting_value), updated_at = CURRENT_TIMESTAMP");
+            if ($stmt && $stmt->execute([$jsonStr])) {
+                $savedToDb = true;
+            }
+        } catch (Throwable $e) {
+            error_log("Gagal simpan setting ke MySQL: " . $e->getMessage());
+        } catch (Exception $e) {}
+    }
+    
+    echo json_encode([
+        'success' => true,
+        'message' => 'Pengaturan website berhasil disimpan.',
+        'savedToDb' => $savedToDb,
+        'storageEngine' => $savedToDb ? 'MySQL Plesk' : 'File JSON'
+    ]);
+    exit;
+}
+`;
+};
+
+export const generateApiTestDbPhp = (): string => {
+  return `<?php
+/**
+ * API Diagnostic Test & Auto-Repair Database MySQL Hosting Plesk
+ */
+@ini_set('display_errors', '0');
+error_reporting(0);
+
+header('Content-Type: application/json; charset=utf-8');
+header('Access-Control-Allow-Origin: *');
+
+require_once __DIR__ . '/../db_config.php';
+
+$pdo = getDbConnection();
+$phpVersion = phpversion();
+$pdoLoaded = extension_loaded('pdo');
+$pdoMysqlLoaded = extension_loaded('pdo_mysql');
+
+if ($pdo) {
+    try {
+        $stmt = $pdo->query("SELECT DATABASE() as current_db, VERSION() as db_version");
+        $info = $stmt ? $stmt->fetch() : [];
+        
+        // Cek tabel-tabel penting
+        $tables = [];
+        $tStmt = $pdo->query("SHOW TABLES");
+        if ($tStmt) {
+            $tRows = $tStmt->fetchAll(PDO::FETCH_NUM);
+            foreach ($tRows as $tr) {
+                $tables[] = $tr[0];
+            }
+        }
+
+        echo json_encode([
+            'success' => true,
+            'isConnected' => true,
+            'status' => 'ONLINE',
+            'message' => 'Koneksi Database MySQL Plesk Aktif dan Berjalan Sempurna 100%!',
+            'phpVersion' => $phpVersion,
+            'database' => $info['current_db'] ?? DB_NAME,
+            'mysqlVersion' => $info['db_version'] ?? 'Unknown',
+            'dbHost' => DB_HOST,
+            'dbUser' => DB_USER,
+            'tables' => $tables,
+            'tablesCount' => count($tables),
+            'storageEngine' => 'MySQL Plesk'
+        ], JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
+    } catch (Throwable $e) {
+        echo json_encode([
+            'success' => false,
+            'isConnected' => false,
+            'status' => 'ERROR',
+            'error' => $e->getMessage(),
+            'phpVersion' => $phpVersion,
+            'storageEngine' => 'File JSON (Fallback Aktif)'
+        ]);
+    }
+} else {
+    echo json_encode([
+        'success' => false,
+        'isConnected' => false,
+        'status' => 'OFFLINE_FALLBACK',
+        'error' => 'Koneksi ke MySQL database "' . DB_NAME . '" di host "' . DB_HOST . '" belum terhubung. Sistem secara otomatis menggunakan penyimpanan File JSON sehingga website tetap 100% aktif!',
+        'phpVersion' => $phpVersion,
+        'pdoLoaded' => $pdoLoaded,
+        'pdoMysqlLoaded' => $pdoMysqlLoaded,
+        'tips' => [
+            'Pastikan database ' . DB_NAME . ' dan user ' . DB_USER . ' sudah dibuat di menu Databases Plesk.',
+            'Pastikan password user MySQL sesuai dengan ' . DB_PASS . ' (atau perbarui di db_config.php).'
+        ],
+        'storageEngine' => 'File JSON (Aman)'
+    ], JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
+}
+`;
+};
+
+export const generateUnzipPhpFile = (): string => {
+  return `<?php
+/**
+ * Auto Extractor & Safe Installer for Plesk / cPanel
+ * Web Personal Ust. Jaenal Maskun, S.Pd.I.
+ * Mengamankan Data & Media yang Telah Diubah Saat Menimpa ZIP
+ */
+$pageTitle = "Plesk Auto Extractor & Web Installer (Safe Update Mode)";
+$targetZip = null;
+
+$zipFiles = glob('*.zip');
+if (!empty($zipFiles)) {
+    $targetZip = $zipFiles[0];
+}
+
+$message = '';
+$status = '';
+
+if (isset($_POST['extract'])) {
+    if (!$targetZip || !file_exists($targetZip)) {
+        $message = "Berkas ZIP tidak ditemukan di direktori saat ini.";
+        $status = "error";
+    } else {
+        // 1. Backup seluruh data & media yang sudah ada di server sebelum ekstrak
+        $backupDir = __DIR__ . '/.plesk_safe_backup_' . time();
+        @mkdir($backupDir, 0755, true);
+        @mkdir($backupDir . '/data', 0755, true);
+        @mkdir($backupDir . '/uploads', 0755, true);
+        @mkdir($backupDir . '/public_uploads', 0755, true);
+
+        if (file_exists(__DIR__ . '/db_config.local.php')) {
+            @copy(__DIR__ . '/db_config.local.php', $backupDir . '/db_config.local.php');
+        }
+        if (file_exists(__DIR__ . '/db_config.php')) {
+            @copy(__DIR__ . '/db_config.php', $backupDir . '/db_config.php');
+        }
+
+        // Backup folder data
+        if (is_dir(__DIR__ . '/data')) {
+            $dataFiles = glob(__DIR__ . '/data/*');
+            foreach ($dataFiles as $df) {
+                if (is_file($df)) {
+                    @copy($df, $backupDir . '/data/' . basename($df));
+                }
+            }
+        }
+
+        // Backup folder uploads
+        if (is_dir(__DIR__ . '/uploads')) {
+            $uploadFiles = glob(__DIR__ . '/uploads/*');
+            foreach ($uploadFiles as $uf) {
+                if (is_file($uf)) {
+                    @copy($uf, $backupDir . '/uploads/' . basename($uf));
+                }
+            }
+        }
+        if (is_dir(__DIR__ . '/public/uploads')) {
+            $pubUploadFiles = glob(__DIR__ . '/public/uploads/*');
+            foreach ($pubUploadFiles as $puf) {
+                if (is_file($puf)) {
+                    @copy($puf, $backupDir . '/public_uploads/' . basename($puf));
+                }
+            }
+        }
+
+        $zip = new ZipArchive;
+        if ($zip->open($targetZip) === TRUE) {
+            $zip->extractTo(__DIR__);
+            $zip->close();
+
+            // 2. Pulihkan kembali seluruh konfigurasi, data, dan media asli yang ada di hosting
+            if (file_exists($backupDir . '/db_config.local.php')) {
+                @copy($backupDir . '/db_config.local.php', __DIR__ . '/db_config.local.php');
+            }
+            if (file_exists($backupDir . '/db_config.php')) {
+                @copy($backupDir . '/db_config.php', __DIR__ . '/db_config.php');
+            }
+
+            if (is_dir($backupDir . '/data')) {
+                if (!is_dir(__DIR__ . '/data')) @mkdir(__DIR__ . '/data', 0755, true);
+                $bData = glob($backupDir . '/data/*');
+                foreach ($bData as $bdf) {
+                    if (is_file($bdf)) @copy($bdf, __DIR__ . '/data/' . basename($bdf));
+                }
+            }
+
+            if (is_dir($backupDir . '/uploads')) {
+                if (!is_dir(__DIR__ . '/uploads')) @mkdir(__DIR__ . '/uploads', 0755, true);
+                $bUploads = glob($backupDir . '/uploads/*');
+                foreach ($bUploads as $buf) {
+                    if (is_file($buf)) @copy($buf, __DIR__ . '/uploads/' . basename($buf));
+                }
+            }
+
+            if (is_dir($backupDir . '/public_uploads')) {
+                if (!is_dir(__DIR__ . '/public/uploads')) @mkdir(__DIR__ . '/public/uploads', 0755, true);
+                $bPubUploads = glob($backupDir . '/public_uploads/*');
+                foreach ($bPubUploads as $bpuf) {
+                    if (is_file($bpuf)) @copy($bpuf, __DIR__ . '/public/uploads/' . basename($bpuf));
+                }
+            }
+
+            // Bersihkan folder temporary backup
+            $tempFiles = array_merge(
+                (array)glob($backupDir . '/data/*'),
+                (array)glob($backupDir . '/uploads/*'),
+                (array)glob($backupDir . '/public_uploads/*'),
+                (array)glob($backupDir . '/*')
+            );
+            foreach ($tempFiles as $tf) {
+                if (is_file($tf)) @unlink($tf);
+            }
+            @rmdir($backupDir . '/data');
+            @rmdir($backupDir . '/uploads');
+            @rmdir($backupDir . '/public_uploads');
+            @rmdir($backupDir);
+
+            $message = "Sukses! Berkas " . htmlspecialchars($targetZip) . " berhasil diekstrak 100%. Seluruh data website, media unggahan & database MySQL Anda tetap utuh dan aman!";
+            $status = "success";
+        } else {
+            $message = "Gagal mengekstrak berkas ZIP. Pastikan izin folder (CHMOD) httpdocs adalah 755.";
+            $status = "error";
+        }
+    }
+}
+?>
+<!DOCTYPE html>
+<html lang="id">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title><?php echo $pageTitle; ?></title>
+  <script src="https://cdn.tailwindcss.com"></script>
+</head>
+<body class="bg-slate-900 text-slate-100 min-h-screen flex items-center justify-center p-4">
+  <div class="max-w-lg w-full bg-slate-800 border border-slate-700 rounded-3xl p-6 md:p-8 shadow-2xl space-y-6">
+    <div class="text-center space-y-2">
+      <span class="text-amber-400 font-bold text-xs uppercase tracking-widest block">Plesk Auto Installer</span>
+      <h1 class="text-xl md:text-2xl font-bold text-white">Ekstraksi Cepat Web Ustadz Jaenal Maskun</h1>
+      <p class="text-xs text-slate-400">Ekstrak otomatis seluruh berkas web ke folder httpdocs Plesk tanpa ribet.</p>
+    </div>
+
+    <?php if ($message): ?>
+      <div class="p-4 rounded-2xl text-xs font-semibold <?php echo $status === 'success' ? 'bg-emerald-950/80 text-emerald-300 border border-emerald-500/40' : 'bg-rose-950/80 text-rose-300 border border-rose-500/40'; ?>">
+        <?php echo $message; ?>
+      </div>
+    <?php endif; ?>
+
+    <div class="bg-slate-900/60 p-4 rounded-2xl border border-slate-700/60 text-xs space-y-2">
+      <div class="flex justify-between text-slate-300">
+        <span class="text-slate-400">Berkas ZIP Terdeteksi:</span>
+        <span class="font-mono text-amber-300 font-bold"><?php echo $targetZip ? htmlspecialchars($targetZip) : 'Tidak Ditemukan'; ?></span>
+      </div>
+      <div class="flex justify-between text-slate-300">
+        <span class="text-slate-400">Direktori Target:</span>
+        <span class="font-mono text-slate-200"><?php echo __DIR__; ?></span>
+      </div>
+    </div>
+
+    <form method="POST" class="space-y-3">
+      <button type="submit" name="extract" <?php echo !$targetZip ? 'disabled' : ''; ?> class="w-full py-3.5 bg-gradient-to-r from-amber-400 to-amber-500 hover:from-amber-300 text-slate-950 font-bold text-sm rounded-xl shadow-lg transition active:scale-95 disabled:opacity-40 cursor-pointer">
+        ⚡ Ekstrak & Aktifkan Website Sekarang
+      </button>
+      <a href="index.php" class="block text-center py-2.5 text-xs text-slate-400 hover:text-white transition">
+        Kunjungi Halaman Beranda (index.php) &rarr;
+      </a>
+    </form>
+  </div>
+</body>
+</html>
+`;
+};
+
+export const generateReadmePlesk = (): string => {
+  return `# PANDUAN DEPLOYMENT HOSTING PLESK & MYSQL
+Website Personal Ust. Jaenal Maskun, S.Pd.I.
+
+Paket ZIP ini dirancang khusus untuk deployment instan di Plesk Obsidian / Onyx / cPanel.
+
+---
+
+## DETAIL DATABASE MYSQL PLESK:
+- Database Host : ${PLESK_DB_CONFIG.host}
+- Database Port : ${PLESK_DB_CONFIG.port}
+- Database User : ${PLESK_DB_CONFIG.user}
+- Database Name : ${PLESK_DB_CONFIG.database}
+- Database Pass : ${PLESK_DB_CONFIG.password}
+
+---
+
+## LANGKAH 1: UNGGAH KE PLESK (FILE MANAGER)
+1. Masuk ke Panel Plesk hosting Anda.
+2. Buka menu **Files** -> masuk ke direktori **httpdocs/**.
+3. Klik tombol **Upload Files** -> pilih berkas ZIP ini.
+4. Klik pada berkas ZIP -> pilih menu **Extract Files** (atau buka browser ke \`https://domainanda.com/unzip.php\`).
+5. Seluruh berkas (index.html, index.php, .htaccess, api/, data/, db_config.php) akan langsung berada di tempatnya.
+
+---
+
+## LANGKAH 2: IMPORT DATABASE MYSQL (PHPMYADMIN)
+1. Di Panel Plesk, buka menu **Databases**.
+2. Pastikan database \`${PLESK_DB_CONFIG.database}\` dengan user \`${PLESK_DB_CONFIG.user}\` sudah dibuat.
+3. Klik tombol **phpMyAdmin** pada database tersebut.
+4. Klik tab **Import** di bagian atas phpMyAdmin.
+5. Klik **Choose File** -> pilih berkas \`database.sql\` yang ada di dalam paket ini.
+6. Klik **Go** (Kirim) di bagian bawah.
+7. Semua tabel (\`site_settings\`, \`messages\`, \`admin_users\`, dll) akan langsung siap 100%!
+
+---
+
+## LANGKAH 3: CEK & LOGIN SUPER ADMIN
+- Buka website Anda di browser.
+- Akses portal admin di: \`https://domainanda.com/?admin=true\`
+- Default Email    : \`jaenalmaskun@gmail.com\`
+- Default Password : \`masbagus\`
+
+Website kini 100% siap digunakan dan seluruh data tersimpan permanen di database MySQL Plesk Anda!
+`;
+};
+
+export const generateApiBackupZipPhp = (): string => {
+  return `<?php
+/**
+ * api/backup-zip.php
+ * Endpoint Pengunduhan Paket Cadangan Komplit (.ZIP) Langsung dari Server Plesk
+ * Super cepat, zero memory footprint di browser HP/Android, mencegah crash Out-of-Memory (Aw, Snap!)
+ */
+@ini_set('memory_limit', '512M');
+@set_time_limit(180);
+@error_reporting(0);
+
+// Pre-flight CORS & Fast Check
+if ($_SERVER['REQUEST_METHOD'] === 'OPTIONS') {
+    header('Access-Control-Allow-Origin: *');
+    header('Access-Control-Allow-Methods: GET, HEAD, OPTIONS');
+    header('Access-Control-Allow-Headers: *');
+    exit;
+}
+
+if ($_SERVER['REQUEST_METHOD'] === 'HEAD' || (isset($_GET['check']) && $_GET['check'] === '1')) {
+    header('Access-Control-Allow-Origin: *');
+    header('Content-Type: application/zip');
+    header('Cache-Control: no-cache, no-store, must-revalidate');
+    exit;
+}
+
+$currentData = null;
+$dataFile = __DIR__ . '/../data/persisted_site_data.json';
+if (file_exists($dataFile)) {
+    $currentData = @json_decode(file_get_contents($dataFile), true);
+}
+
+// Coba ambil versi paling segar dari database MySQL jika tersedia
+if (file_exists(__DIR__ . '/db_config.php')) {
+    @require_once __DIR__ . '/db_config.php';
+    if (function_exists('getDbConnection')) {
+        try {
+            $pdo = getDbConnection();
+            if ($pdo) {
+                $stmt = $pdo->query("SELECT setting_value FROM site_settings WHERE setting_key = 'site_data' LIMIT 1");
+                $row = $stmt ? $stmt->fetch(PDO::FETCH_ASSOC) : null;
+                if ($row && !empty($row['setting_value'])) {
+                    $decoded = @json_decode($row['setting_value'], true);
+                    if ($decoded) $currentData = $decoded;
+                }
+            }
+        } catch (\\Exception $e) {}
+    }
+}
+
+if (!$currentData) {
+    $currentData = ['siteContent' => []];
+}
+
+$dateStr = date('Y-m-d');
+$zipFilename = 'backup-data-komplit-jaenalmaskun-' . $dateStr . '.zip';
+$tempZipPath = sys_get_temp_dir() . '/' . uniqid('backup_', true) . '.zip';
+
+if (class_exists('ZipArchive')) {
+    $zip = new ZipArchive();
+    if ($zip->open($tempZipPath, ZipArchive::CREATE | ZipArchive::OVERWRITE) === true) {
+        // 1. Data JSON
+        $zip->addFromString('data/persisted_site_data.json', json_encode($currentData, JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES));
+        
+        $msgFile = __DIR__ . '/../data/persisted_messages.json';
+        if (file_exists($msgFile)) {
+            $zip->addFile($msgFile, 'data/persisted_messages.json');
+        } else {
+            $zip->addFromString('data/persisted_messages.json', '[]');
+        }
+
+        // 2. Database SQL
+        $sql = "-- CADANGAN DATABASE WEB RESMI UST. JAENAL MASKUN, S.Pd.I.\\n";
+        $sql .= "-- Waktu Ekspor: " . date('Y-m-d H:i:s') . "\\n\\n";
+        $sql .= "CREATE TABLE IF NOT EXISTS \`site_settings\` (\\n";
+        $sql .= "  \`setting_key\` VARCHAR(100) NOT NULL PRIMARY KEY,\\n";
+        $sql .= "  \`setting_value\` LONGTEXT,\\n";
+        $sql .= "  \`updated_at\` TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP\\n";
+        $sql .= ") ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;\\n\\n";
+        $escapedData = addslashes(json_encode($currentData, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES));
+        $sql .= "REPLACE INTO \`site_settings\` (\`setting_key\`, \`setting_value\`) VALUES ('site_data', '" . $escapedData . "');\\n";
+        $zip->addFromString('database.sql', $sql);
+
+        // 3. Uploads directory - Membackup 100% seluruh isi uploads tanpa ada yang tertinggal (logo, galeri foto, video, dokumen, dsb)
+        $uploadsDir = __DIR__ . '/../uploads';
+        if (is_dir($uploadsDir)) {
+            $files = scandir($uploadsDir);
+            foreach ($files as $file) {
+                if ($file === '.' || $file === '..') continue;
+                $filePath = $uploadsDir . '/' . $file;
+                if (is_file($filePath)) {
+                    $zip->addFile($filePath, 'uploads/' . $file);
+                }
+            }
+        }
+
+        // 4. README
+        $readme = "PAKET CADANGAN KOMPLIT WEB UST. JAENAL MASKUN, S.Pd.I.\n";
+        $readme .= "Tanggal Ekspor: " . date('d-m-Y H:i:s') . "\n";
+        $readme .= "Format: Multi-Format Komplit 100% (.ZIP berisi data JSON, skrip MySQL .SQL, dan seluruh berkas foto/media/uploads)\n";
+        $readme .= "Kelengkapan: Database, Logo, Galeri Foto, Video Galeri, Dokumen PDF, & Pengaturan Sistem.\n";
+        $readme .= "Kompatibilitas: Android, iOS, Windows, Mac, Hosting Plesk, & cPanel.\n";
+        $zip->addFromString('README_CADANGAN.txt', $readme);
+
+        $zip->close();
+
+        if (file_exists($tempZipPath)) {
+            // Bersihkan semua output buffer agar file besar (video/zip ratusan MB) dialirkan langsung tanpa memakan RAM server
+            while (ob_get_level()) {
+                @ob_end_clean();
+            }
+            header('Access-Control-Allow-Origin: *');
+            header('Content-Type: application/zip');
+            header('Content-Disposition: attachment; filename="' . $zipFilename . '"');
+            header('Content-Length: ' . filesize($tempZipPath));
+            header('Cache-Control: no-cache, no-store, must-revalidate');
+            header('Pragma: no-cache');
+            header('Expires: 0');
+
+            // Streaming potongan 1MB untuk keamanan memori & kestabilan di peramban HP Android
+            $fp = @fopen($tempZipPath, 'rb');
+            if ($fp) {
+                while (!feof($fp) && (connection_status() === 0)) {
+                    echo fread($fp, 1048576); // 1MB per chunk
+                    @flush();
+                }
+                fclose($fp);
+            } else {
+                readfile($tempZipPath);
+            }
+            @unlink($tempZipPath);
+            exit;
+        }
+    }
+}
+
+// Fallback jika ZipArchive tidak ada
+header('Access-Control-Allow-Origin: *');
+header('Content-Type: application/json');
+header('Content-Disposition: attachment; filename="backup-master-web-jaenalmaskun-' . $dateStr . '.json"');
+echo json_encode(['version' => '2.0', 'data' => $currentData], JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
+exit;
+`;
+};
+
+export const generateApiBackupRestorePhp = (): string => {
+  return `<?php
+/**
+ * api/backup-restore.php
+ * Endpoint Pemulihan Data Cadangan (.JSON / .SQL / Snapshot)
+ * Mendukung cPanel & Plesk dengan Sinkronisasi Otomatis ke MySQL dan File JSON
+ */
+@ini_set('display_errors', '0');
+@ini_set('memory_limit', '512M');
+@error_reporting(0);
+
+header('Content-Type: application/json; charset=utf-8');
+header('Access-Control-Allow-Origin: *');
+header('Access-Control-Allow-Methods: GET, POST, OPTIONS');
+header('Access-Control-Allow-Headers: *');
+
+if ($_SERVER['REQUEST_METHOD'] === 'OPTIONS') {
+    http_response_code(200);
+    exit;
+}
+
+require_once __DIR__ . '/../db_config.php';
+$pdo = getDbConnection();
+
+$dataDir = __DIR__ . '/../data';
+$snapshotsDir = $dataDir . '/snapshots';
+$dataFile1 = $dataDir . '/persisted_site_data.json';
+$dataFile2 = $dataDir . '/site_data.json';
+
+if (!is_dir($dataDir)) @mkdir($dataDir, 0755, true);
+if (!is_dir($snapshotsDir)) @mkdir($snapshotsDir, 0755, true);
+
+$raw = @file_get_contents('php://input');
+$payload = @json_decode($raw, true);
+
+if (!$payload || !is_array($payload)) {
+    http_response_code(400);
+    echo json_encode(['success' => false, 'error' => 'Berkas cadangan tidak valid atau data kosong'], JSON_UNESCAPED_UNICODE);
+    exit;
+}
+
+// 1. Support raw SQL payload
+if (!empty($payload['_rawSqlText']) || !empty($payload['sql'])) {
+    $sql = !empty($payload['_rawSqlText']) ? $payload['_rawSqlText'] : $payload['sql'];
+    if (preg_match('/[\'\"\\x60]site_data[\'\"\\x60]\\s*,\\s*([\'\"\\x60])(.*?)(\\1)\\s*(\\)|,)/s', $sql, $m)) {
+        $extracted = @json_decode(stripslashes($m[2]), true);
+        if ($extracted && is_array($extracted)) {
+            $payload = $extracted;
+        }
+    }
+}
+
+// 2. Support phpMyAdmin array dump
+if (isset($payload[0]) && is_array($payload[0])) {
+    foreach ($payload as $row) {
+        if (isset($row['setting_key']) && $row['setting_key'] === 'site_data' && !empty($row['setting_value'])) {
+            $val = is_string($row['setting_value']) ? @json_decode($row['setting_value'], true) : $row['setting_value'];
+            if ($val) { $payload = $val; break; }
+        }
+    }
+}
+
+if (isset($payload['setting_key']) && $payload['setting_key'] === 'site_data' && !empty($payload['setting_value'])) {
+    $val = is_string($payload['setting_value']) ? @json_decode($payload['setting_value'], true) : $payload['setting_value'];
+    if ($val) $payload = $val;
+}
+
+// 3. Extract siteContent, logoConfig, stickyFooterConfig
+$incomingData = isset($payload['data']) && is_array($payload['data']) ? $payload['data'] : $payload;
+$siteContent = isset($incomingData['siteContent']) ? $incomingData['siteContent'] : (isset($payload['siteContent']) ? $payload['siteContent'] : null);
+$logoConfig = isset($incomingData['logoConfig']) ? $incomingData['logoConfig'] : (isset($payload['logoConfig']) ? $payload['logoConfig'] : null);
+$stickyFooterConfig = isset($incomingData['stickyFooterConfig']) ? $incomingData['stickyFooterConfig'] : (isset($payload['stickyFooterConfig']) ? $payload['stickyFooterConfig'] : null);
+
+if (!$siteContent && (isset($payload['profile']) || isset($payload['publications']) || isset($incomingData['profile']))) {
+    $siteContent = isset($incomingData['profile']) ? $incomingData : $payload;
+}
+
+if (!$siteContent && !$logoConfig && !$stickyFooterConfig) {
+    http_response_code(400);
+    echo json_encode(['success' => false, 'error' => 'Format data cadangan tidak dikenali.'], JSON_UNESCAPED_UNICODE);
+    exit;
+}
+
+// 4. Create Safety Snapshot before applying restore
+$existingData = null;
+if (file_exists($dataFile1)) {
+    $existingData = @json_decode(@file_get_contents($dataFile1), true);
+}
+if ($existingData) {
+    $snapId = 'snap_' . (time() * 1000) . '_' . substr(md5(uniqid()), 0, 4);
+    $snapshotObj = [
+        'id' => $snapId,
+        'timestamp' => time() * 1000,
+        'dateFormatted' => date('d M Y, H:i:s'),
+        'source' => 'restore',
+        'label' => 'Snapshot Otomatis Sebelum Pemulihan Data',
+        'data' => $existingData
+    ];
+    @file_put_contents($snapshotsDir . '/' . $snapId . '.json', json_encode($snapshotObj, JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE));
+}
+
+// 5. Merge restored data
+$nowTs = time() * 1000;
+$current = $existingData ? $existingData : [];
+$restoredData = $current;
+$restoredData['lastUpdated'] = $nowTs;
+
+if ($siteContent) {
+    $restoredData['siteContent'] = array_merge(isset($current['siteContent']) && is_array($current['siteContent']) ? $current['siteContent'] : [], $siteContent);
+}
+if ($logoConfig) {
+    $restoredData['logoConfig'] = array_merge(isset($current['logoConfig']) && is_array($current['logoConfig']) ? $current['logoConfig'] : [], $logoConfig);
+}
+if ($stickyFooterConfig) {
+    $restoredData['stickyFooterConfig'] = array_merge(isset($current['stickyFooterConfig']) && is_array($current['stickyFooterConfig']) ? $current['stickyFooterConfig'] : [], $stickyFooterConfig);
+}
+
+// Proteksi OOM: Ekstrak string Base64 masif menjadi berkas fisik di uploads/
+$convertBase64ToFiles = function(&$item, $uploadsDir) use (&$convertBase64ToFiles) {
+    if (!is_array($item)) return;
+    foreach ($item as $k => &$v) {
+        if (is_string($v) && preg_match('/^data:image\/([a-zA-Z0-9\+\-]+);base64,(.+)$/s', $v, $matches)) {
+            $ext = strtolower($matches[1]);
+            if ($ext === 'jpeg') $ext = 'jpg';
+            if ($ext === 'svg+xml') $ext = 'svg';
+            $bin = base64_decode($matches[2]);
+            if ($bin !== false && strlen($bin) > 0) {
+                $hash = substr(md5($bin), 0, 10);
+                $fn = 'img_' . time() . '_' . $hash . '.' . $ext;
+                if (!is_dir($uploadsDir)) @mkdir($uploadsDir, 0755, true);
+                @file_put_contents($uploadsDir . '/' . $fn, $bin);
+                $v = '/uploads/' . $fn;
+            }
+        } elseif (is_array($v)) {
+            $convertBase64ToFiles($v, $uploadsDir);
+        }
+    }
+};
+$convertBase64ToFiles($restoredData, __DIR__ . '/../uploads');
+
+// 6. Save to local JSON files
+$jsonStr = json_encode($restoredData, JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
+@file_put_contents($dataFile1, $jsonStr);
+@file_put_contents($dataFile2, $jsonStr);
+
+// 7. Save to MySQL with ON DUPLICATE KEY UPDATE
+$savedDb = false;
+if ($pdo) {
+    try {
+        $stmt = $pdo->prepare("INSERT INTO site_settings (setting_key, setting_value) VALUES ('site_data', ?) ON DUPLICATE KEY UPDATE setting_value = VALUES(setting_value), updated_at = CURRENT_TIMESTAMP");
+        if ($stmt && $stmt->execute([$jsonStr])) {
+            $savedDb = true;
+        }
+    } catch (Throwable $e) {}
+}
+
+echo json_encode([
+    'success' => true,
+    'message' => 'Seluruh data website berhasil dipulihkan dari berkas cadangan!',
+    'restoredData' => $restoredData,
+    'lastUpdated' => $nowTs,
+    'savedToDb' => $savedDb,
+    'storageEngine' => $savedDb ? 'MySQL' : 'File JSON'
+], JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
+exit;
+`;
+};
+
+export const generateApiBackupRestoreZipPhp = (): string => {
+  return `<?php
+/**
+ * api/backup-restore-zip.php
+ * Endpoint Pemulihan Paket ZIP Komplit (.ZIP)
+ * Mengekstrak seluruh berkas media ke uploads/ dan memperbarui database serta cache
+ */
+@ini_set('display_errors', '0');
+@ini_set('memory_limit', '512M');
+@set_time_limit(300);
+@error_reporting(0);
+
+header('Content-Type: application/json; charset=utf-8');
+header('Access-Control-Allow-Origin: *');
+header('Access-Control-Allow-Methods: GET, POST, OPTIONS');
+header('Access-Control-Allow-Headers: *');
+
+if ($_SERVER['REQUEST_METHOD'] === 'OPTIONS') {
+    http_response_code(200);
+    exit;
+}
+
+if (!isset($_FILES['backupZip']) || empty($_FILES['backupZip']['tmp_name'])) {
+    http_response_code(400);
+    echo json_encode(['success' => false, 'error' => 'Tidak ada berkas ZIP yang diunggah'], JSON_UNESCAPED_UNICODE);
+    exit;
+}
+
+$zipTmpPath = $_FILES['backupZip']['tmp_name'];
+$zip = new ZipArchive();
+if ($zip->open($zipTmpPath) !== TRUE) {
+    http_response_code(400);
+    echo json_encode(['success' => false, 'error' => 'Berkas ZIP rusak atau tidak dapat dibuka'], JSON_UNESCAPED_UNICODE);
+    exit;
+}
+
+require_once __DIR__ . '/../db_config.php';
+$pdo = getDbConnection();
+
+$dataDir = __DIR__ . '/../data';
+$uploadsDir = __DIR__ . '/../uploads';
+$dataUploadsDir = $dataDir . '/uploads';
+$snapshotsDir = $dataDir . '/snapshots';
+$dataFile1 = $dataDir . '/persisted_site_data.json';
+$dataFile2 = $dataDir . '/site_data.json';
+
+if (!is_dir($dataDir)) @mkdir($dataDir, 0755, true);
+if (!is_dir($uploadsDir)) @mkdir($uploadsDir, 0755, true);
+if (!is_dir($dataUploadsDir)) @mkdir($dataUploadsDir, 0755, true);
+if (!is_dir($snapshotsDir)) @mkdir($snapshotsDir, 0755, true);
+
+// 1. Ekstrak seluruh berkas media dari ZIP ke uploads/
+$restoredFilesCount = 0;
+for ($i = 0; $i < $zip->numFiles; $i++) {
+    $entryName = $zip->getNameIndex($i);
+    if (strpos($entryName, 'uploads/') !== false || strpos($entryName, 'data/uploads/') !== false) {
+        $baseName = basename($entryName);
+        if (!empty($baseName) && $baseName[0] !== '.') {
+            $stream = $zip->getStream($entryName);
+            if ($stream) {
+                $contents = stream_get_contents($stream);
+                fclose($stream);
+                @file_put_contents($uploadsDir . '/' . $baseName, $contents);
+                @file_put_contents($dataUploadsDir . '/' . $baseName, $contents);
+                $restoredFilesCount++;
+            }
+        }
+    }
+}
+
+// 2. Temukan JSON site data atau SQL di dalam ZIP
+$jsonContentStr = null;
+$candidatePaths = [
+    'data/persisted_site_data.json',
+    'persisted_site_data.json',
+    'data/site_data.default.json',
+    'site_data.default.json',
+    'data/site_data.json',
+    'site_data.json',
+    'backup.json'
+];
+
+foreach ($candidatePaths as $cp) {
+    $idx = $zip->locateName($cp);
+    if ($idx !== false) {
+        $jsonContentStr = $zip->getFromIndex($idx);
+        break;
+    }
+}
+
+if (!$jsonContentStr) {
+    for ($i = 0; $i < $zip->numFiles; $i++) {
+        $name = $zip->getNameIndex($i);
+        if (substr($name, -5) === '.json') {
+            $content = $zip->getFromIndex($i);
+            $parsed = @json_decode($content, true);
+            if (isset($parsed['siteContent']) || isset($parsed['data']['siteContent']) || isset($parsed['profile'])) {
+                $jsonContentStr = $content;
+                break;
+            }
+        }
+    }
+}
+
+if (!$jsonContentStr) {
+    for ($i = 0; $i < $zip->numFiles; $i++) {
+        $name = $zip->getNameIndex($i);
+        if (substr($name, -4) === '.sql') {
+            $sqlContent = $zip->getFromIndex($i);
+            if (preg_match('/[\'\"\\x60]site_data[\'\"\\x60]\\s*,\\s*([\'\"\\x60])(.*?)(\\1)\\s*(\\)|,)/s', $sqlContent, $m)) {
+                $jsonContentStr = stripslashes($m[2]);
+                break;
+            }
+        }
+    }
+}
+
+$zip->close();
+
+if (!$jsonContentStr) {
+    http_response_code(400);
+    echo json_encode(['success' => false, 'error' => 'Berkas ZIP tidak memuat data konfigurasi website yang valid'], JSON_UNESCAPED_UNICODE);
+    exit;
+}
+
+$payload = @json_decode($jsonContentStr, true);
+if (!$payload || !is_array($payload)) {
+    http_response_code(400);
+    echo json_encode(['success' => false, 'error' => 'Data konfigurasi di dalam ZIP tidak valid'], JSON_UNESCAPED_UNICODE);
+    exit;
+}
+
+$incomingData = isset($payload['data']) && is_array($payload['data']) ? $payload['data'] : $payload;
+$siteContent = isset($incomingData['siteContent']) ? $incomingData['siteContent'] : (isset($payload['siteContent']) ? $payload['siteContent'] : null);
+$logoConfig = isset($incomingData['logoConfig']) ? $incomingData['logoConfig'] : (isset($payload['logoConfig']) ? $payload['logoConfig'] : null);
+$stickyFooterConfig = isset($incomingData['stickyFooterConfig']) ? $incomingData['stickyFooterConfig'] : (isset($payload['stickyFooterConfig']) ? $payload['stickyFooterConfig'] : null);
+
+if (!$siteContent && (isset($payload['profile']) || isset($incomingData['profile']))) {
+    $siteContent = isset($incomingData['profile']) ? $incomingData : $payload;
+}
+
+// 3. Buat Snapshot Keamanan
+$existingData = null;
+if (file_exists($dataFile1)) {
+    $existingData = @json_decode(@file_get_contents($dataFile1), true);
+}
+if ($existingData) {
+    $snapId = 'snap_' . (time() * 1000) . '_' . substr(md5(uniqid()), 0, 4);
+    $snapshotObj = [
+        'id' => $snapId,
+        'timestamp' => time() * 1000,
+        'dateFormatted' => date('d M Y, H:i:s'),
+        'source' => 'restore',
+        'label' => 'Snapshot Otomatis Sebelum Pemulihan Paket ZIP',
+        'data' => $existingData
+    ];
+    @file_put_contents($snapshotsDir . '/' . $snapId . '.json', json_encode($snapshotObj, JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE));
+}
+
+// 4. Merge dan simpan
+$nowTs = time() * 1000;
+$current = $existingData ? $existingData : [];
+$restoredData = $current;
+$restoredData['lastUpdated'] = $nowTs;
+
+if ($siteContent) {
+    $restoredData['siteContent'] = array_merge(isset($current['siteContent']) && is_array($current['siteContent']) ? $current['siteContent'] : [], $siteContent);
+}
+if ($logoConfig) {
+    $restoredData['logoConfig'] = array_merge(isset($current['logoConfig']) && is_array($current['logoConfig']) ? $current['logoConfig'] : [], $logoConfig);
+}
+if ($stickyFooterConfig) {
+    $restoredData['stickyFooterConfig'] = array_merge(isset($current['stickyFooterConfig']) && is_array($current['stickyFooterConfig']) ? $current['stickyFooterConfig'] : [], $stickyFooterConfig);
+}
+
+// Proteksi OOM: Ekstrak string Base64 masif menjadi berkas fisik di uploads/
+$convertBase64ToFiles = function(&$item, $uploadsDir) use (&$convertBase64ToFiles) {
+    if (!is_array($item)) return;
+    foreach ($item as $k => &$v) {
+        if (is_string($v) && preg_match('/^data:image\/([a-zA-Z0-9\+\-]+);base64,(.+)$/s', $v, $matches)) {
+            $ext = strtolower($matches[1]);
+            if ($ext === 'jpeg') $ext = 'jpg';
+            if ($ext === 'svg+xml') $ext = 'svg';
+            $bin = base64_decode($matches[2]);
+            if ($bin !== false && strlen($bin) > 0) {
+                $hash = substr(md5($bin), 0, 10);
+                $fn = 'img_' . time() . '_' . $hash . '.' . $ext;
+                if (!is_dir($uploadsDir)) @mkdir($uploadsDir, 0755, true);
+                @file_put_contents($uploadsDir . '/' . $fn, $bin);
+                $v = '/uploads/' . $fn;
+            }
+        } elseif (is_array($v)) {
+            $convertBase64ToFiles($v, $uploadsDir);
+        }
+    }
+};
+$convertBase64ToFiles($restoredData, $uploadsDir);
+
+$jsonStr = json_encode($restoredData, JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
+@file_put_contents($dataFile1, $jsonStr);
+@file_put_contents($dataFile2, $jsonStr);
+
+// 5. Simpan ke MySQL
+$savedDb = false;
+if ($pdo) {
+    try {
+        $stmt = $pdo->prepare("INSERT INTO site_settings (setting_key, setting_value) VALUES ('site_data', ?) ON DUPLICATE KEY UPDATE setting_value = VALUES(setting_value), updated_at = CURRENT_TIMESTAMP");
+        if ($stmt && $stmt->execute([$jsonStr])) {
+            $savedDb = true;
+        }
+    } catch (Throwable $e) {}
+}
+
+echo json_encode([
+    'success' => true,
+    'message' => "Paket cadangan ZIP berhasil dipulihkan! {$restoredFilesCount} berkas media disinkronkan.",
+    'restoredData' => $restoredData,
+    'lastUpdated' => $nowTs,
+    'restoredFilesCount' => $restoredFilesCount,
+    'savedToDb' => $savedDb,
+    'storageEngine' => $savedDb ? 'MySQL' : 'File JSON'
+], JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
+exit;
+`;
+};
+
+export const generateApiBackupSnapshotsPhp = (): string => {
+  return `<?php
+/**
+ * api/backup-snapshots.php
+ * Daftar snapshot cadangan otomatis
+ */
+@ini_set('display_errors', '0');
+@error_reporting(0);
+
+header('Content-Type: application/json; charset=utf-8');
+header('Access-Control-Allow-Origin: *');
+header('Access-Control-Allow-Methods: GET, OPTIONS');
+header('Access-Control-Allow-Headers: *');
+
+if ($_SERVER['REQUEST_METHOD'] === 'OPTIONS') {
+    http_response_code(200);
+    exit;
+}
+
+$snapshotsDir = __DIR__ . '/../data/snapshots';
+$snapshots = [];
+
+if (is_dir($snapshotsDir)) {
+    $files = scandir($snapshotsDir);
+    foreach ($files as $file) {
+        if ($file !== '.' && $file !== '..' && substr($file, -5) === '.json') {
+            $raw = @file_get_contents($snapshotsDir . '/' . $file);
+            $parsed = @json_decode($raw, true);
+            if ($parsed && isset($parsed['id'])) {
+                $snapshots[] = [
+                    'id' => $parsed['id'],
+                    'timestamp' => $parsed['timestamp'] ?? 0,
+                    'dateFormatted' => $parsed['dateFormatted'] ?? '',
+                    'source' => $parsed['source'] ?? 'auto',
+                    'label' => $parsed['label'] ?? 'Snapshot Cadangan',
+                    'stats' => $parsed['stats'] ?? []
+                ];
+            }
+        }
+    }
+}
+
+usort($snapshots, function($a, $b) {
+    return ($b['timestamp'] ?? 0) - ($a['timestamp'] ?? 0);
+});
+
+echo json_encode(['success' => true, 'snapshots' => $snapshots], JSON_UNESCAPED_UNICODE);
+exit;
+`;
+};
+
+export const generateApiBackupCreateSnapshotPhp = (): string => {
+  return `<?php
+/**
+ * api/backup-create-snapshot.php
+ * Buat snapshot manual baru
+ */
+@ini_set('display_errors', '0');
+@error_reporting(0);
+
+header('Content-Type: application/json; charset=utf-8');
+header('Access-Control-Allow-Origin: *');
+header('Access-Control-Allow-Methods: POST, OPTIONS');
+header('Access-Control-Allow-Headers: *');
+
+if ($_SERVER['REQUEST_METHOD'] === 'OPTIONS') {
+    http_response_code(200);
+    exit;
+}
+
+$snapshotsDir = __DIR__ . '/../data/snapshots';
+$dataFile = __DIR__ . '/../data/persisted_site_data.json';
+if (!is_dir($snapshotsDir)) @mkdir($snapshotsDir, 0755, true);
+
+$raw = @file_get_contents('php://input');
+$body = @json_decode($raw, true) ?: [];
+$label = !empty($body['label']) ? $body['label'] : 'Cadangan Manual';
+
+$data = null;
+if (file_exists($dataFile)) {
+    $data = @json_decode(@file_get_contents($dataFile), true);
+}
+
+if (!$data) {
+    http_response_code(400);
+    echo json_encode(['success' => false, 'error' => 'Tidak ada data untuk dicadangkan']);
+    exit;
+}
+
+$now = time() * 1000;
+$snapId = 'snap_' . $now . '_' . substr(md5(uniqid()), 0, 4);
+$snapshot = [
+    'id' => $snapId,
+    'timestamp' => $now,
+    'dateFormatted' => date('d M Y, H:i:s'),
+    'source' => 'manual',
+    'label' => $label,
+    'data' => $data
+];
+
+@file_put_contents($snapshotsDir . '/' . $snapId . '.json', json_encode($snapshot, JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE));
+
+echo json_encode(['success' => true, 'message' => 'Snapshot berhasil disimpan', 'snapshot' => $snapshot]);
+exit;
+`;
+};
+
+export const generateApiBackupRestoreSnapshotPhp = (): string => {
+  return `<?php
+/**
+ * api/backup-restore-snapshot.php
+ * Pulihkan snapshot berdasarkan snapshotId
+ */
+@ini_set('display_errors', '0');
+@error_reporting(0);
+
+header('Content-Type: application/json; charset=utf-8');
+header('Access-Control-Allow-Origin: *');
+header('Access-Control-Allow-Methods: POST, OPTIONS');
+header('Access-Control-Allow-Headers: *');
+
+if ($_SERVER['REQUEST_METHOD'] === 'OPTIONS') {
+    http_response_code(200);
+    exit;
+}
+
+$raw = @file_get_contents('php://input');
+$body = @json_decode($raw, true) ?: [];
+$snapshotId = !empty($body['snapshotId']) ? preg_replace('/[^a-zA-Z0-9_-]/', '', $body['snapshotId']) : '';
+
+if (empty($snapshotId)) {
+    http_response_code(400);
+    echo json_encode(['success' => false, 'error' => 'Snapshot ID tidak valid']);
+    exit;
+}
+
+$filePath = __DIR__ . '/../data/snapshots/' . $snapshotId . '.json';
+if (!file_exists($filePath)) {
+    http_response_code(404);
+    echo json_encode(['success' => false, 'error' => 'Berkas snapshot tidak ditemukan']);
+    exit;
+}
+
+$rawSnap = @file_get_contents($filePath);
+$snapshotObj = @json_decode($rawSnap, true);
+$data = $snapshotObj['data'] ?? null;
+
+if (!$data) {
+    http_response_code(400);
+    echo json_encode(['success' => false, 'error' => 'Isi data snapshot rusak']);
+    exit;
+}
+
+require_once __DIR__ . '/../db_config.php';
+$pdo = getDbConnection();
+
+$data['lastUpdated'] = time() * 1000;
+$jsonStr = json_encode($data, JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
+
+@file_put_contents(__DIR__ . '/../data/persisted_site_data.json', $jsonStr);
+@file_put_contents(__DIR__ . '/../data/site_data.json', $jsonStr);
+
+if ($pdo) {
+    try {
+        $stmt = $pdo->prepare("INSERT INTO site_settings (setting_key, setting_value) VALUES ('site_data', ?) ON DUPLICATE KEY UPDATE setting_value = VALUES(setting_value), updated_at = CURRENT_TIMESTAMP");
+        if ($stmt) $stmt->execute([$jsonStr]);
+    } catch (Throwable $e) {}
+}
+
+echo json_encode(['success' => true, 'message' => 'Snapshot berhasil dipulihkan!', 'restoredData' => $data]);
+exit;
+`;
+};
+
+export const generateApiBackupDeleteSnapshotPhp = (): string => {
+  return `<?php
+/**
+ * api/backup-delete-snapshot.php
+ * Hapus snapshot berdasarkan ID
+ */
+@ini_set('display_errors', '0');
+@error_reporting(0);
+
+header('Content-Type: application/json; charset=utf-8');
+header('Access-Control-Allow-Origin: *');
+header('Access-Control-Allow-Methods: GET, POST, DELETE, OPTIONS');
+header('Access-Control-Allow-Headers: *');
+
+if ($_SERVER['REQUEST_METHOD'] === 'OPTIONS') {
+    http_response_code(200);
+    exit;
+}
+
+$id = isset($_GET['id']) ? preg_replace('/[^a-zA-Z0-9_-]/', '', $_GET['id']) : '';
+if (empty($id)) {
+    $raw = @file_get_contents('php://input');
+    $body = @json_decode($raw, true) ?: [];
+    $id = !empty($body['id']) ? preg_replace('/[^a-zA-Z0-9_-]/', '', $body['id']) : '';
+}
+
+if (!empty($id)) {
+    $file = __DIR__ . '/../data/snapshots/' . $id . '.json';
+    if (file_exists($file)) {
+        @unlink($file);
+    }
+}
+
+echo json_encode(['success' => true]);
+exit;
+`;
+};
+
+export const generateApiBackupExportCsvPhp = (): string => {
+  return `<?php
+/**
+ * api/backup-export-csv.php
+ * Ekspor pesan kontak ke berkas CSV
+ */
+@ini_set('display_errors', '0');
+@error_reporting(0);
+
+header('Content-Type: text/csv; charset=utf-8');
+header('Content-Disposition: attachment; filename="pesan_kontak_jaenalmaskun_' . date('Y-m-d') . '.csv"');
+header('Access-Control-Allow-Origin: *');
+
+$dataFile = __DIR__ . '/../data/persisted_messages.json';
+$messages = [];
+if (file_exists($dataFile)) {
+    $messages = @json_decode(@file_get_contents($dataFile), true) ?: [];
+}
+
+$output = fopen('php://output', 'w');
+fprintf($output, chr(0xEF).chr(0xBB).chr(0xBF));
+fputcsv($output, ['ID', 'Nama Pengirim', 'Institusi', 'Email', 'No. HP / WhatsApp', 'Kategori Acara', 'Tanggal Agenda', 'Pesan', 'Status Dibaca', 'Waktu']);
+
+foreach ($messages as $m) {
+    fputcsv($output, [
+        $m['id'] ?? '',
+        $m['sender_name'] ?? ($m['name'] ?? ''),
+        $m['institution'] ?? '',
+        $m['email'] ?? '',
+        $m['phone'] ?? '',
+        $m['event_type'] ?? '',
+        $m['event_date'] ?? '',
+        $m['message'] ?? '',
+        !empty($m['is_read']) ? 'Sudah Dibaca' : 'Belum Dibaca',
+        $m['created_at'] ?? ''
+    ]);
+}
+
+fclose($output);
+exit;
+`;
+};
+
+export const triggerZipDownload = (blob: Blob, filename = 'Web-Personal-Ust-Jaenal-Plesk.zip') => {
+  const url = window.URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = filename;
+  document.body.appendChild(a);
+  a.click();
+  setTimeout(() => {
+    if (document.body.contains(a)) {
+      document.body.removeChild(a);
+    }
+    window.URL.revokeObjectURL(url);
+  }, 3000);
+};
+
+export const downloadPleskPackageZip = async (
+  siteContent?: SiteContentConfig,
+  logoConfig?: HeaderLogoConfig,
+  footerConfig?: StickyFooterConfig,
+  onProgress?: (percent: number, message: string) => void
+): Promise<Blob> => {
+  // Attempt server fetch with timeout, safely fallback to client generation
+  if (onProgress) onProgress(30, 'Menyiapkan paket ZIP Plesk...');
+  try {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), 3500);
+    const response = await fetch('/api/export-plesk-zip', { signal: controller.signal });
+    clearTimeout(timer);
+    if (response.ok) {
+      const contentType = response.headers.get('content-type') || '';
+      if (contentType.includes('zip') || contentType.includes('octet-stream')) {
+        if (onProgress) onProgress(90, 'Menyelesaikan paket ZIP...');
+        const blob = await response.blob();
+        if (onProgress) onProgress(100, 'Paket ZIP Hosting Plesk siap diunduh!');
+        return blob;
+      }
+    }
+  } catch (e) {
+    console.warn('Fallback generating client zip', e);
+  }
+
+  const zip = new JSZip();
+  const content = siteContent || defaultSiteContent;
+
+  if (onProgress) onProgress(10, 'Menyiapkan database MySQL denbagues_webpersonal...');
+
+  // 1. Root Database & Config files
+  zip.file('database.sql', generateDatabaseSql(content, logoConfig, footerConfig));
+  zip.file('db_config.php', generateDbConfigFile());
+  zip.file('unzip.php', generateUnzipPhpFile());
+  zip.file('index.php', generateIndexPhpFallback());
+  zip.file('og-image.php', generateOgImagePhp());
+  zip.file('.htaccess', generateHtaccessFile());
+  zip.file('README_PLESK.md', generateReadmePlesk());
+  zip.file('PANDUAN_HOSTING_PLESK.txt', generateReadmePlesk());
+
+  // 2. Folder api/
+  const apiFolder = zip.folder('api');
+  if (apiFolder) {
+    apiFolder.file('site-data.php', generateApiSiteDataPhp());
+    apiFolder.file('site-content.php', generateApiSiteContentPhp());
+    apiFolder.file('logo-config.php', generateApiLogoConfigPhp());
+    apiFolder.file('sticky-footer-config.php', generateApiStickyFooterConfigPhp());
+    apiFolder.file('sync-to-mysql.php', generateApiSyncToMysqlPhp());
+    apiFolder.file('share-settings.php', generateApiShareSettingsPhp());
+    apiFolder.file('upload-thumbnail.php', generateApiUploadThumbnailPhp());
+    apiFolder.file('sync-status.php', generateApiSyncStatusPhp());
+    apiFolder.file('upload-image.php', generateApiUploadImagePhp());
+    apiFolder.file('upload-file.php', generateApiUploadImagePhp());
+    apiFolder.file('upload-video-chunk.php', generateApiUploadVideoChunkPhp());
+    apiFolder.file('upload-video.php', generateApiUploadVideoPhp());
+    apiFolder.file('upload-video-form.php', generateApiUploadVideoPhp());
+    apiFolder.file('admin-login.php', generateApiAdminLoginPhp());
+    apiFolder.file('messages.php', generateApiMessagesPhp());
+    apiFolder.file('settings.php', generateApiSettingsPhp());
+    apiFolder.file('test_db.php', generateApiTestDbPhp());
+    apiFolder.file('backup-zip.php', generateApiBackupZipPhp());
+    apiFolder.file('backup-zip-data.php', generateApiBackupZipPhp());
+    apiFolder.file('backup-restore.php', generateApiBackupRestorePhp());
+    apiFolder.file('backup-restore-zip.php', generateApiBackupRestoreZipPhp());
+    apiFolder.file('backup-snapshots.php', generateApiBackupSnapshotsPhp());
+    apiFolder.file('backup-create-snapshot.php', generateApiBackupCreateSnapshotPhp());
+    apiFolder.file('backup-restore-snapshot.php', generateApiBackupRestoreSnapshotPhp());
+    apiFolder.file('backup-delete-snapshot.php', generateApiBackupDeleteSnapshotPhp());
+    apiFolder.file('backup-export-csv.php', generateApiBackupExportCsvPhp());
+    apiFolder.file('db_config.php', generateDbConfigFile());
+  }
+
+  // 3. Folder data/
+  const dataFolder = zip.folder('data');
+  if (dataFolder) {
+    const fullJson = JSON.stringify({
+      siteContent: content,
+      logoConfig: logoConfig || {},
+      stickyFooterConfig: footerConfig || {},
+      lastUpdated: Date.now()
+    }, null, 2);
+    // Anti Data Loss: Hanya sertakan template bawaan *.default.json!
+    // JANGAN sertakan persisted_site_data.json, messages.json, atau mysql_config.json
+    // agar ekstraksi ZIP di hosting Plesk TIDAK PERNAH menimpa data yang sudah disetting user.
+    dataFolder.file('site_data.default.json', fullJson);
+    dataFolder.file('messages.default.json', JSON.stringify([], null, 2));
+    dataFolder.file('mysql_config.default.json', JSON.stringify(PLESK_DB_CONFIG, null, 2));
+    dataFolder.file('PERLINDUNGAN_DATA_PLESK.txt', `SISTEM ANTI DATA-LOSS AKTIF:
+Berkas data live (persisted_site_data.json, messages.json, db_config.local.php) Anda di hosting Plesk dijamin 100% AMAN dan TIDAK AKAN PERNAH tertimpa saat Anda mengekstrak paket ZIP baru ini.
+`);
+  }
+
+  const zipBlob = await zip.generateAsync({
+    type: 'blob',
+    compression: 'DEFLATE',
+    compressionOptions: { level: 6 }
+  });
+
+  return zipBlob;
+};
