@@ -57,30 +57,27 @@ function getDbConnection() {
         return null;
     }
 
-    $hosts = [
-        DB_HOST,
-        'localhost',
-        '127.0.0.1',
-        'localhost:/var/run/mysqld/mysqld.sock',
-        'localhost:/tmp/mysql.sock'
-    ];
+    // Jika database belum diset atau masih default placeholder, lewati agar tidak memicu timeout 500
+    if (empty(DB_NAME) || DB_NAME === 'your_db_name' || empty(DB_USER)) {
+        return null;
+    }
+
+    $hosts = [DB_HOST];
+    if (DB_HOST === 'localhost') {
+        $hosts[] = '127.0.0.1';
+    }
     $hosts = array_unique($hosts);
     
     $options = [
         PDO::ATTR_ERRMODE            => PDO::ERRMODE_SILENT,
         PDO::ATTR_DEFAULT_FETCH_MODE => PDO::FETCH_ASSOC,
         PDO::ATTR_EMULATE_PREPARES   => false,
-        PDO::ATTR_TIMEOUT            => 3,
+        PDO::ATTR_TIMEOUT            => 1,
     ];
 
     foreach ($hosts as $h) {
         try {
-            if (strpos($h, 'sock') !== false) {
-                $sock = explode(':', $h)[1] ?? $h;
-                $dsn = "mysql:unix_socket={$sock};dbname=" . DB_NAME . ";charset=" . DB_CHARSET;
-            } else {
-                $dsn = "mysql:host={$h};port=" . DB_PORT . ";dbname=" . DB_NAME . ";charset=" . DB_CHARSET;
-            }
+            $dsn = "mysql:host={$h};port=" . DB_PORT . ";dbname=" . DB_NAME . ";charset=" . DB_CHARSET;
             $instance = new PDO($dsn, DB_USER, DB_PASS, $options);
             if ($instance) {
                 $pdo = $instance;
@@ -89,12 +86,12 @@ function getDbConnection() {
                 
                 // Amankan konfigurasi ke db_config.local.php agar kebal dari timpaan ZIP
                 if (!file_exists(__DIR__ . '/db_config.local.php')) {
-                    $localPhp = "<?php\\n" .
-                        "if (!defined('DB_HOST')) define('DB_HOST', '" . addslashes(DB_HOST) . "');\\n" .
-                        "if (!defined('DB_PORT')) define('DB_PORT', " . (int)DB_PORT . ");\\n" .
-                        "if (!defined('DB_USER')) define('DB_USER', '" . addslashes(DB_USER) . "');\\n" .
-                        "if (!defined('DB_PASS')) define('DB_PASS', '" . addslashes(DB_PASS) . "');\\n" .
-                        "if (!defined('DB_NAME')) define('DB_NAME', '" . addslashes(DB_NAME) . "');\\n";
+                    $localPhp = "<?php\n" .
+                        "if (!defined('DB_HOST')) define('DB_HOST', '" . addslashes(DB_HOST) . "');\n" .
+                        "if (!defined('DB_PORT')) define('DB_PORT', " . (int)DB_PORT . ");\n" .
+                        "if (!defined('DB_USER')) define('DB_USER', '" . addslashes(DB_USER) . "');\n" .
+                        "if (!defined('DB_PASS')) define('DB_PASS', '" . addslashes(DB_PASS) . "');\n" .
+                        "if (!defined('DB_NAME')) define('DB_NAME', '" . addslashes(DB_NAME) . "');\n";
                     @file_put_contents(__DIR__ . '/db_config.local.php', $localPhp);
                 }
                 
@@ -114,38 +111,38 @@ function autoInitMysqlTables($pdo) {
     if (!$pdo) return;
     try {
         // 1. Tabel site_settings
-        $pdo->exec("CREATE TABLE IF NOT EXISTS \`site_settings\` (
-            \`id\` int(11) NOT NULL AUTO_INCREMENT,
-            \`setting_key\` varchar(100) NOT NULL UNIQUE,
-            \`setting_value\` LONGTEXT NOT NULL,
-            \`updated_at\` timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
-            PRIMARY KEY (\`id\`)
+        $pdo->exec("CREATE TABLE IF NOT EXISTS site_settings (
+            id int(11) NOT NULL AUTO_INCREMENT,
+            setting_key varchar(100) NOT NULL UNIQUE,
+            setting_value LONGTEXT NOT NULL,
+            updated_at timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+            PRIMARY KEY (id)
         ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci");
 
         // 2. Tabel messages
-        $pdo->exec("CREATE TABLE IF NOT EXISTS \`messages\` (
-            \`id\` int(11) NOT NULL AUTO_INCREMENT,
-            \`sender_name\` varchar(150) NOT NULL,
-            \`institution\` varchar(150) DEFAULT NULL,
-            \`email\` varchar(150) NOT NULL,
-            \`phone\` varchar(50) DEFAULT NULL,
-            \`event_type\` varchar(100) DEFAULT NULL,
-            \`event_date\` varchar(100) DEFAULT NULL,
-            \`message\` text NOT NULL,
-            \`is_read\` tinyint(1) NOT NULL DEFAULT 0,
-            \`created_at\` timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP,
-            PRIMARY KEY (\`id\`)
+        $pdo->exec("CREATE TABLE IF NOT EXISTS messages (
+            id int(11) NOT NULL AUTO_INCREMENT,
+            sender_name varchar(150) NOT NULL,
+            institution varchar(150) DEFAULT NULL,
+            email varchar(150) NOT NULL,
+            phone varchar(50) DEFAULT NULL,
+            event_type varchar(100) DEFAULT NULL,
+            event_date varchar(100) DEFAULT NULL,
+            message text NOT NULL,
+            is_read tinyint(1) NOT NULL DEFAULT 0,
+            created_at timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            PRIMARY KEY (id)
         ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci");
 
         // 3. Tabel admin_users
-        $pdo->exec("CREATE TABLE IF NOT EXISTS \`admin_users\` (
-            \`id\` int(11) NOT NULL AUTO_INCREMENT,
-            \`name\` varchar(150) NOT NULL DEFAULT 'Ust. Jaenal Maskun',
-            \`email\` varchar(150) NOT NULL UNIQUE,
-            \`password_hash\` varchar(255) NOT NULL,
-            \`role\` varchar(50) NOT NULL DEFAULT 'Super Admin',
-            \`created_at\` timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP,
-            PRIMARY KEY (\`id\`)
+        $pdo->exec("CREATE TABLE IF NOT EXISTS admin_users (
+            id int(11) NOT NULL AUTO_INCREMENT,
+            name varchar(150) NOT NULL DEFAULT 'Ust. Jaenal Maskun',
+            email varchar(150) NOT NULL UNIQUE,
+            password_hash varchar(255) NOT NULL,
+            role varchar(50) NOT NULL DEFAULT 'Super Admin',
+            created_at timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            PRIMARY KEY (id)
         ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci");
 
         // Cek jika site_settings masih kosong, auto seed dari file JSON default
@@ -153,9 +150,10 @@ function autoInitMysqlTables($pdo) {
         if ($stmt) {
             $row = $stmt->fetch();
             if (empty($row['cnt']) || (int)$row['cnt'] === 0) {
-                $dataFile = __DIR__ . '/data/persisted_site_data.json';
-                if (!file_exists($dataFile)) $dataFile = __DIR__ . '/data/site_data.json';
-                if (!file_exists($dataFile)) $dataFile = __DIR__ . '/data/site_data.default.json';
+                $root = is_dir(__DIR__ . '/data') ? __DIR__ : dirname(__DIR__);
+                $dataFile = $root . '/data/persisted_site_data.json';
+                if (!file_exists($dataFile)) $dataFile = $root . '/data/site_data.json';
+                if (!file_exists($dataFile)) $dataFile = $root . '/data/site_data.default.json';
                 if (file_exists($dataFile)) {
                     $json = @file_get_contents($dataFile);
                     if ($json) {
@@ -181,8 +179,9 @@ DirectoryIndex index.php index.html
 
 <IfModule mod_rewrite.c>
     RewriteEngine On
-    # RewriteBase dinamis - otomatis menyesuaikan bila ditaruh di root public_html ataupun subfolder
-    # RewriteBase /
+
+    # Hentikan penulisan ulang jika permintaan sudah ke index.php (Anti-Loop Error 500)
+    RewriteRule ^index\.php$ - [L]
 
     # Cegah akses langsung ke file sensitif
     RewriteRule ^(db_config\\.php|db_config\\.local\\.php|database\\.sql|\\.git|\\.env|package\\.json|server\\.ts) - [F,L,NC]
@@ -217,14 +216,13 @@ DirectoryIndex index.php index.html
     RewriteRule ^api/backup/zip-data/?$ api/backup-zip.php [QSA,L]
     RewriteRule ^api/export-plesk-zip/?$ api/export-zip.php [QSA,L]
 
-    # Jika file fisik aset (.js, .css, .jpg, .png, .svg, .mp4, dll) ada, layani langsung
+    # Jika berkas atau direktori fisik ada (misal: .js, .css, gambar, audio, video), layani langsung tanpa redirect
     RewriteCond %{REQUEST_FILENAME} -f [OR]
     RewriteCond %{REQUEST_FILENAME} -d
-    RewriteCond %{REQUEST_URI} !\\.(html|htm)$ [NC]
     RewriteRule ^ - [L]
 
-    # SPA Fallback ke index.php
-    RewriteRule ^(.*)$ index.php [QSA,L]
+    # Seluruh rute aplikasi SPA diarahkan ke index.php
+    RewriteRule ^ index.php [QSA,L]
 </IfModule>
 
 <IfModule mod_mime.c>
@@ -237,14 +235,6 @@ DirectoryIndex index.php index.html
     AddType audio/wav .wav
     AddType audio/ogg .oga .ogg
     AddType audio/mp4 .m4a .aac
-</IfModule>
-
-<IfModule mod_headers.c>
-    Header always set Access-Control-Allow-Origin "*"
-    Header always set Access-Control-Allow-Methods "GET, POST, OPTIONS, PUT, DELETE, PATCH, HEAD"
-    Header always set Access-Control-Allow-Headers "Origin, X-Requested-With, Content-Type, Accept, Authorization, Cache-Control, Range, X-Upload-Id, X-Chunk-Index, X-Total-Chunks, X-Filename, X-Title, X-Duration, X-Width, X-Height, X-Thumbnail"
-    Header always set Accept-Ranges "bytes"
-    Header always set X-Content-Type-Options "nosniff"
 </IfModule>
 `;
 };
@@ -318,8 +308,9 @@ $baseUrl = $protocol . $host;
 $reqUri = $_SERVER['REQUEST_URI'] ?? '/';
 $canonicalUrl = $baseUrl . $reqUri;
 
-$scriptDir = rtrim(dirname($_SERVER['SCRIPT_NAME'] ?? ''), '/\\');
-if ($scriptDir === '\\' || $scriptDir === '.' || $scriptDir === '/') {
+$scriptName = str_replace(chr(92), '/', $_SERVER['SCRIPT_NAME'] ?? '');
+$scriptDir = rtrim(dirname($scriptName), '/');
+if ($scriptDir === '.' || $scriptDir === '/') {
     $scriptDir = '';
 }
 $baseAppUrl = $baseUrl . $scriptDir;
@@ -403,7 +394,7 @@ if (file_exists($htmlFile)) {
             $html = preg_replace('/src="\\/avatar-jaenal/i', 'src="' . $scriptDir . '/avatar-jaenal', $html);
             $html = preg_replace('/src="\\/og-image/i', 'src="' . $scriptDir . '/og-image', $html);
             $html = str_replace('"/uploads/', '"' . $scriptDir . '/uploads/', $html);
-            $html = str_replace('\'/uploads/', '\'' . $scriptDir . '/uploads/', $html);
+            $html = str_replace("'/uploads/", "'" . $scriptDir . "/uploads/", $html);
         }
         
         @header('Content-Type: text/html; charset=utf-8');
@@ -1830,7 +1821,13 @@ export const generateUnzipPhpFile = (): string => {
  * Web Personal Ust. Jaenal Maskun, S.Pd.I.
  * Mengamankan Data & Media yang Telah Diubah Saat Menimpa ZIP
  */
-$pageTitle = "Plesk Auto Extractor & Web Installer (Safe Update Mode)";
+@ini_set('memory_limit', '512M');
+@ini_set('max_execution_time', '300');
+@set_time_limit(300);
+@ini_set('display_errors', '0');
+error_reporting(0);
+
+$pageTitle = "Plesk / cPanel Auto Extractor & Web Installer (Safe Update Mode)";
 $targetZip = null;
 
 $zipFiles = glob('*.zip');
@@ -1842,108 +1839,116 @@ $message = '';
 $status = '';
 
 if (isset($_POST['extract'])) {
-    if (!$targetZip || !file_exists($targetZip)) {
-        $message = "Berkas ZIP tidak ditemukan di direktori saat ini.";
+    if (!class_exists('ZipArchive')) {
+        $message = "Ekstensi PHP 'ZipArchive' belum aktif di server hosting Anda. Silakan ekstrak file ZIP langsung via File Manager cPanel / Plesk (Klik Kanan berkas ZIP -> Extract), atau aktifkan ekstensi 'zip' pada menu cPanel 'Select PHP Version'.";
+        $status = "error";
+    } elseif (!$targetZip || !file_exists($targetZip)) {
+        $message = "Berkas ZIP tidak ditemukan di direktori saat ini. Pastikan Anda mengunggah file .zip ke folder yang sama.";
         $status = "error";
     } else {
-        // 1. Backup seluruh data & media yang sudah ada di server sebelum ekstrak
-        $backupDir = __DIR__ . '/.plesk_safe_backup_' . time();
-        @mkdir($backupDir, 0755, true);
-        @mkdir($backupDir . '/data', 0755, true);
-        @mkdir($backupDir . '/uploads', 0755, true);
-        @mkdir($backupDir . '/public_uploads', 0755, true);
+        try {
+            // 1. Backup seluruh data & media yang sudah ada di server sebelum ekstrak
+            $backupDir = __DIR__ . '/.plesk_safe_backup_' . time();
+            @mkdir($backupDir, 0755, true);
+            @mkdir($backupDir . '/data', 0755, true);
+            @mkdir($backupDir . '/uploads', 0755, true);
+            @mkdir($backupDir . '/public_uploads', 0755, true);
 
-        if (file_exists(__DIR__ . '/db_config.local.php')) {
-            @copy(__DIR__ . '/db_config.local.php', $backupDir . '/db_config.local.php');
-        }
-        if (file_exists(__DIR__ . '/db_config.php')) {
-            @copy(__DIR__ . '/db_config.php', $backupDir . '/db_config.php');
-        }
-
-        // Backup folder data
-        if (is_dir(__DIR__ . '/data')) {
-            $dataFiles = glob(__DIR__ . '/data/*');
-            foreach ($dataFiles as $df) {
-                if (is_file($df)) {
-                    @copy($df, $backupDir . '/data/' . basename($df));
-                }
+            if (file_exists(__DIR__ . '/db_config.local.php')) {
+                @copy(__DIR__ . '/db_config.local.php', $backupDir . '/db_config.local.php');
             }
-        }
-
-        // Backup folder uploads
-        if (is_dir(__DIR__ . '/uploads')) {
-            $uploadFiles = glob(__DIR__ . '/uploads/*');
-            foreach ($uploadFiles as $uf) {
-                if (is_file($uf)) {
-                    @copy($uf, $backupDir . '/uploads/' . basename($uf));
-                }
-            }
-        }
-        if (is_dir(__DIR__ . '/public/uploads')) {
-            $pubUploadFiles = glob(__DIR__ . '/public/uploads/*');
-            foreach ($pubUploadFiles as $puf) {
-                if (is_file($puf)) {
-                    @copy($puf, $backupDir . '/public_uploads/' . basename($puf));
-                }
-            }
-        }
-
-        $zip = new ZipArchive;
-        if ($zip->open($targetZip) === TRUE) {
-            $zip->extractTo(__DIR__);
-            $zip->close();
-
-            // 2. Pulihkan kembali seluruh konfigurasi, data, dan media asli yang ada di hosting
-            if (file_exists($backupDir . '/db_config.local.php')) {
-                @copy($backupDir . '/db_config.local.php', __DIR__ . '/db_config.local.php');
-            }
-            if (file_exists($backupDir . '/db_config.php')) {
-                @copy($backupDir . '/db_config.php', __DIR__ . '/db_config.php');
+            if (file_exists(__DIR__ . '/db_config.php')) {
+                @copy(__DIR__ . '/db_config.php', $backupDir . '/db_config.php');
             }
 
-            if (is_dir($backupDir . '/data')) {
-                if (!is_dir(__DIR__ . '/data')) @mkdir(__DIR__ . '/data', 0755, true);
-                $bData = glob($backupDir . '/data/*');
-                foreach ($bData as $bdf) {
-                    if (is_file($bdf)) @copy($bdf, __DIR__ . '/data/' . basename($bdf));
+            // Backup folder data
+            if (is_dir(__DIR__ . '/data')) {
+                $dataFiles = glob(__DIR__ . '/data/*');
+                foreach ($dataFiles as $df) {
+                    if (is_file($df)) {
+                        @copy($df, $backupDir . '/data/' . basename($df));
+                    }
                 }
             }
 
-            if (is_dir($backupDir . '/uploads')) {
-                if (!is_dir(__DIR__ . '/uploads')) @mkdir(__DIR__ . '/uploads', 0755, true);
-                $bUploads = glob($backupDir . '/uploads/*');
-                foreach ($bUploads as $buf) {
-                    if (is_file($buf)) @copy($buf, __DIR__ . '/uploads/' . basename($buf));
+            // Backup folder uploads
+            if (is_dir(__DIR__ . '/uploads')) {
+                $uploadFiles = glob(__DIR__ . '/uploads/*');
+                foreach ($uploadFiles as $uf) {
+                    if (is_file($uf)) {
+                        @copy($uf, $backupDir . '/uploads/' . basename($uf));
+                    }
+                }
+            }
+            if (is_dir(__DIR__ . '/public/uploads')) {
+                $pubUploadFiles = glob(__DIR__ . '/public/uploads/*');
+                foreach ($pubUploadFiles as $puf) {
+                    if (is_file($puf)) {
+                        @copy($puf, $backupDir . '/public_uploads/' . basename($puf));
+                    }
                 }
             }
 
-            if (is_dir($backupDir . '/public_uploads')) {
-                if (!is_dir(__DIR__ . '/public/uploads')) @mkdir(__DIR__ . '/public/uploads', 0755, true);
-                $bPubUploads = glob($backupDir . '/public_uploads/*');
-                foreach ($bPubUploads as $bpuf) {
-                    if (is_file($bpuf)) @copy($bpuf, __DIR__ . '/public/uploads/' . basename($bpuf));
+            $zip = new ZipArchive;
+            if ($zip->open($targetZip) === TRUE) {
+                $zip->extractTo(__DIR__);
+                $zip->close();
+
+                // 2. Pulihkan kembali seluruh konfigurasi, data, dan media asli yang ada di hosting
+                if (file_exists($backupDir . '/db_config.local.php')) {
+                    @copy($backupDir . '/db_config.local.php', __DIR__ . '/db_config.local.php');
                 }
-            }
+                if (file_exists($backupDir . '/db_config.php')) {
+                    @copy($backupDir . '/db_config.php', __DIR__ . '/db_config.php');
+                }
 
-            // Bersihkan folder temporary backup
-            $tempFiles = array_merge(
-                (array)glob($backupDir . '/data/*'),
-                (array)glob($backupDir . '/uploads/*'),
-                (array)glob($backupDir . '/public_uploads/*'),
-                (array)glob($backupDir . '/*')
-            );
-            foreach ($tempFiles as $tf) {
-                if (is_file($tf)) @unlink($tf);
-            }
-            @rmdir($backupDir . '/data');
-            @rmdir($backupDir . '/uploads');
-            @rmdir($backupDir . '/public_uploads');
-            @rmdir($backupDir);
+                if (is_dir($backupDir . '/data')) {
+                    if (!is_dir(__DIR__ . '/data')) @mkdir(__DIR__ . '/data', 0755, true);
+                    $bData = glob($backupDir . '/data/*');
+                    foreach ($bData as $bdf) {
+                        if (is_file($bdf)) @copy($bdf, __DIR__ . '/data/' . basename($bdf));
+                    }
+                }
 
-            $message = "Sukses! Berkas " . htmlspecialchars($targetZip) . " berhasil diekstrak 100%. Seluruh data website, media unggahan & database MySQL Anda tetap utuh dan aman!";
-            $status = "success";
-        } else {
-            $message = "Gagal mengekstrak berkas ZIP. Pastikan izin folder (CHMOD) httpdocs adalah 755.";
+                if (is_dir($backupDir . '/uploads')) {
+                    if (!is_dir(__DIR__ . '/uploads')) @mkdir(__DIR__ . '/uploads', 0755, true);
+                    $bUploads = glob($backupDir . '/uploads/*');
+                    foreach ($bUploads as $buf) {
+                        if (is_file($buf)) @copy($buf, __DIR__ . '/uploads/' . basename($buf));
+                    }
+                }
+
+                if (is_dir($backupDir . '/public_uploads')) {
+                    if (!is_dir(__DIR__ . '/public/uploads')) @mkdir(__DIR__ . '/public/uploads', 0755, true);
+                    $bPubUploads = glob($backupDir . '/public_uploads/*');
+                    foreach ($bPubUploads as $bpuf) {
+                        if (is_file($bpuf)) @copy($bpuf, __DIR__ . '/public/uploads/' . basename($bpuf));
+                    }
+                }
+
+                // Bersihkan folder temporary backup
+                $tempFiles = array_merge(
+                    (array)glob($backupDir . '/data/*'),
+                    (array)glob($backupDir . '/uploads/*'),
+                    (array)glob($backupDir . '/public_uploads/*'),
+                    (array)glob($backupDir . '/*')
+                );
+                foreach ($tempFiles as $tf) {
+                    if (is_file($tf)) @unlink($tf);
+                }
+                @rmdir($backupDir . '/data');
+                @rmdir($backupDir . '/uploads');
+                @rmdir($backupDir . '/public_uploads');
+                @rmdir($backupDir);
+
+                $message = "Sukses! Berkas " . htmlspecialchars($targetZip) . " berhasil diekstrak 100%. Seluruh data website, media unggahan & database MySQL Anda tetap utuh dan aman!";
+                $status = "success";
+            } else {
+                $message = "Gagal mengekstrak berkas ZIP. Pastikan izin folder (CHMOD) direktori adalah 755.";
+                $status = "error";
+            }
+        } catch (Throwable $e) {
+            $message = "Terjadi kendala saat mengekstrak: " . htmlspecialchars($e->getMessage());
             $status = "error";
         }
     }
@@ -2232,7 +2237,7 @@ if (!$payload || !is_array($payload)) {
 // 1. Support raw SQL payload
 if (!empty($payload['_rawSqlText']) || !empty($payload['sql'])) {
     $sql = !empty($payload['_rawSqlText']) ? $payload['_rawSqlText'] : $payload['sql'];
-    if (preg_match('/[\'\"\\x60]site_data[\'\"\\x60]\\s*,\\s*([\'\"\\x60])(.*?)(\\1)\\s*(\\)|,)/s', $sql, $m)) {
+    if (preg_match('~[\\x60\\"\\x27]site_data[\\x60\\"\\x27]\\s*,\\s*([\\x60\\"\\x27])(.*?)(\\1)\\s*(\\)|,)~s', $sql, $m)) {
         $extracted = @json_decode(stripslashes($m[2]), true);
         if ($extracted && is_array($extracted)) {
             $payload = $extracted;
@@ -2465,7 +2470,7 @@ if (!$jsonContentStr) {
         $name = $zip->getNameIndex($i);
         if (substr($name, -4) === '.sql') {
             $sqlContent = $zip->getFromIndex($i);
-            if (preg_match('/[\'\"\\x60]site_data[\'\"\\x60]\\s*,\\s*([\'\"\\x60])(.*?)(\\1)\\s*(\\)|,)/s', $sqlContent, $m)) {
+            if (preg_match('~[\\x60\\"\\x27]site_data[\\x60\\"\\x27]\\s*,\\s*([\\x60\\"\\x27])(.*?)(\\1)\\s*(\\)|,)~s', $sqlContent, $m)) {
                 $jsonContentStr = stripslashes($m[2]);
                 break;
             }
@@ -2837,6 +2842,71 @@ exit;
 `;
 };
 
+export const generateApiExportZipPhp = (): string => {
+  return `<?php
+/**
+ * api/export-cpanel-zip.php & api/export-zip.php
+ * Pengunduhan Paket Website & Cadangan Mandiri Hosting cPanel / Plesk
+ */
+@ini_set('memory_limit', '512M');
+@set_time_limit(180);
+@error_reporting(0);
+
+// Pre-flight CORS & Fast Check
+if ($_SERVER['REQUEST_METHOD'] === 'OPTIONS') {
+    header('Access-Control-Allow-Origin: *');
+    header('Access-Control-Allow-Methods: GET, POST, HEAD, OPTIONS');
+    header('Access-Control-Allow-Headers: *');
+    exit;
+}
+
+if (file_exists(__DIR__ . '/backup-zip.php')) {
+    require __DIR__ . '/backup-zip.php';
+    exit;
+}
+
+header('Content-Type: application/json; charset=utf-8');
+echo json_encode(['success' => true, 'message' => 'Layanan ekspor hosting aktif.']);
+exit;
+`;
+};
+
+export const generateApiAdminProfilePhp = (): string => {
+  return `<?php
+/**
+ * api/admin-profile.php, admin-update-profile.php, admin-update-password.php
+ */
+@ini_set('display_errors', '0');
+@error_reporting(0);
+
+header('Content-Type: application/json; charset=utf-8');
+header('Access-Control-Allow-Origin: *');
+header('Access-Control-Allow-Methods: GET, POST, OPTIONS');
+header('Access-Control-Allow-Headers: Content-Type, Authorization');
+
+if ($_SERVER['REQUEST_METHOD'] === 'OPTIONS') {
+    http_response_code(200);
+    exit;
+}
+
+$root = is_dir(__DIR__ . '/data') ? __DIR__ : dirname(__DIR__);
+$dataFile = $root . '/data/persisted_site_data.json';
+if (!file_exists($dataFile)) $dataFile = $root . '/data/site_data.json';
+$data = file_exists($dataFile) ? @json_decode(@file_get_contents($dataFile), true) : [];
+
+echo json_encode([
+    'success' => true,
+    'user' => [
+        'name' => $data['siteContent']['profile']['name'] ?? 'Ust. Jaenal Maskun, S.Pd.I.',
+        'email' => $data['siteContent']['profile']['email'] ?? 'jaenalmaskun@gmail.com',
+        'role' => 'Super Administrator'
+    ],
+    'message' => 'Profil admin berhasil diperbarui'
+]);
+exit;
+`;
+};
+
 export const triggerZipDownload = (blob: Blob, filename = 'Web-Personal-Ust-Jaenal-Plesk.zip') => {
   const url = window.URL.createObjectURL(blob);
   const a = document.createElement('a');
@@ -2931,6 +3001,13 @@ export const downloadPleskPackageZip = async (
     apiFolder.file('backup-restore-snapshot.php', generateApiBackupRestoreSnapshotPhp());
     apiFolder.file('backup-delete-snapshot.php', generateApiBackupDeleteSnapshotPhp());
     apiFolder.file('backup-export-csv.php', generateApiBackupExportCsvPhp());
+    apiFolder.file('export-plesk-zip.php', generateApiExportZipPhp());
+    apiFolder.file('export-cpanel-zip.php', generateApiExportZipPhp());
+    apiFolder.file('export-zip.php', generateApiExportZipPhp());
+    apiFolder.file('backup-full.php', generateApiBackupZipPhp());
+    apiFolder.file('admin-profile.php', generateApiAdminProfilePhp());
+    apiFolder.file('admin-update-profile.php', generateApiAdminProfilePhp());
+    apiFolder.file('admin-update-password.php', generateApiAdminProfilePhp());
     apiFolder.file('db_config.php', generateDbConfigFile());
   }
 

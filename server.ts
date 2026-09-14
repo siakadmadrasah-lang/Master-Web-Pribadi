@@ -24,8 +24,11 @@ import {
   generateApiBackupCreateSnapshotPhp,
   generateApiBackupRestoreSnapshotPhp,
   generateApiBackupDeleteSnapshotPhp,
-  generateApiBackupExportCsvPhp
+  generateApiBackupExportCsvPhp,
+  generateApiExportZipPhp,
+  generateApiAdminProfilePhp
 } from './src/utils/pleskExporter';
+import { generateCpanelHtaccess, generateCpanelReadme } from './src/utils/cpanelExporter';
 
 dotenv.config();
 
@@ -4981,8 +4984,9 @@ DirectoryIndex index.php index.html
 
 <IfModule mod_rewrite.c>
     RewriteEngine On
-    # RewriteBase dinamis: mendukung instalasi di root public_html maupun di subfolder/folder luar
-    # RewriteBase /
+
+    # Hentikan penulisan ulang jika permintaan sudah ke index.php (Anti-Loop Error 500)
+    RewriteRule ^index\.php$ - [L]
 
     # Cegah akses langsung ke file sensitif
     RewriteRule ^(db_config\\.php|db_config\\.local\\.php|database\\.sql|\\.git|\\.env|package\\.json|server\\.ts) - [F,L,NC]
@@ -5019,17 +5023,16 @@ DirectoryIndex index.php index.html
     RewriteRule ^api/export-plesk-zip/?$ api/export-zip.php [QSA,L]
     RewriteRule ^api/export-cpanel-zip/?$ api/export-zip.php [QSA,L]
 
-    # File atau folder fisik langsung dilayani
+    # File atau folder fisik langsung dilayani tanpa rewrite loop
     RewriteCond %{REQUEST_FILENAME} -f [OR]
     RewriteCond %{REQUEST_FILENAME} -d
-    RewriteCond %{REQUEST_URI} !\\.(html|htm)$ [NC]
     RewriteRule ^ - [L]
 
     # SPA Fallback ke index.php
-    RewriteRule ^(.*)$ index.php [QSA,L]
+    RewriteRule ^ index.php [QSA,L]
 </IfModule>
 
-# MIME Type & Byte-Range Streaming untuk Video MP4/WebM dan Audio
+# MIME Type Streaming untuk Video & Audio
 <IfModule mod_mime.c>
     AddType video/mp4 .mp4 .m4v
     AddType video/webm .webm
@@ -5037,19 +5040,6 @@ DirectoryIndex index.php index.html
     AddType audio/mpeg .mp3
     AddType audio/ogg .ogg
     AddType audio/wav .wav
-</IfModule>
-
-<IfModule mod_headers.c>
-    Header always set Access-Control-Allow-Origin "*"
-    Header always set Access-Control-Allow-Methods "GET, POST, OPTIONS, PUT, DELETE, PATCH"
-    Header always set Access-Control-Allow-Headers "Origin, X-Requested-With, Content-Type, Accept, Authorization, Cache-Control, X-Upload-ID, X-Chunk-Index, X-Total-Chunks, X-Filename, X-Title, X-Duration, X-Width, X-Height, X-Thumbnail"
-    Header always set X-Content-Type-Options "nosniff"
-
-    <FilesMatch "\\.(mp4|m4v|webm|ogv|mp3|ogg|wav)$">
-        Header set Accept-Ranges bytes
-        Header set Access-Control-Allow-Origin "*"
-        Header set Cache-Control "public, max-age=31536000, immutable"
-    </FilesMatch>
 </IfModule>
 `;
 }
@@ -5199,8 +5189,9 @@ $baseUrl = $protocol . $host;
 $reqUri = $_SERVER['REQUEST_URI'] ?? '/';
 $canonicalUrl = $baseUrl . $reqUri;
 
-$scriptDir = rtrim(dirname($_SERVER['SCRIPT_NAME'] ?? ''), '/\\');
-if ($scriptDir === '\\' || $scriptDir === '.' || $scriptDir === '/') {
+$scriptName = str_replace(chr(92), '/', $_SERVER['SCRIPT_NAME'] ?? '');
+$scriptDir = rtrim(dirname($scriptName), '/');
+if ($scriptDir === '.' || $scriptDir === '/') {
     $scriptDir = '';
 }
 $baseAppUrl = $baseUrl . $scriptDir;
@@ -5281,7 +5272,7 @@ if (file_exists($htmlFile)) {
             $html = preg_replace('/src="\\/avatar-jaenal/i', 'src="' . $scriptDir . '/avatar-jaenal', $html);
             $html = preg_replace('/src="\\/og-image/i', 'src="' . $scriptDir . '/og-image', $html);
             $html = str_replace('"/uploads/', '"' . $scriptDir . '/uploads/', $html);
-            $html = str_replace('\'/uploads/', '\'' . $scriptDir . '/uploads/', $html);
+            $html = str_replace("'/uploads/", "'" . $scriptDir . "/uploads/", $html);
         }
         
         @header('Content-Type: text/html; charset=utf-8');
@@ -7394,6 +7385,13 @@ const handleExportPleskZip = async (req: any, res: any) => {
       apiFolder.file('backup-restore-snapshot.php', generateApiBackupRestoreSnapshotPhp());
       apiFolder.file('backup-delete-snapshot.php', generateApiBackupDeleteSnapshotPhp());
       apiFolder.file('backup-export-csv.php', generateApiBackupExportCsvPhp());
+      apiFolder.file('export-plesk-zip.php', generateApiExportZipPhp());
+      apiFolder.file('export-cpanel-zip.php', generateApiExportZipPhp());
+      apiFolder.file('export-zip.php', generateApiExportZipPhp());
+      apiFolder.file('backup-full.php', generatePleskApiBackupZip());
+      apiFolder.file('admin-profile.php', generateApiAdminProfilePhp());
+      apiFolder.file('admin-update-profile.php', generateApiAdminProfilePhp());
+      apiFolder.file('admin-update-password.php', generateApiAdminProfilePhp());
       apiFolder.file('db_config.php', generatePleskDbConfigPhp());
     }
 
@@ -7488,7 +7486,7 @@ const handleExportCpanelZip = async (req: any, res: any) => {
     // 1. Root Database & Config files for cPanel
     zip.file('database.sql', generateSqlContent(currentData));
     zip.file('db_config.php', generatePleskDbConfigPhp());
-    zip.file('.htaccess', generatePleskHtaccess());
+    zip.file('.htaccess', generateCpanelHtaccess());
     zip.file('index.php', generatePleskIndexPhp());
     zip.file('og-image.php', generateOgImagePhp());
     zip.file('unzip.php', generatePleskUnzipPhp());
@@ -7496,8 +7494,8 @@ const handleExportCpanelZip = async (req: any, res: any) => {
     zip.file('redirect.html', generateCpanelBridgeHtml());
     zip.file('symlink_maker.php', generateCpanelSymlinkMakerPhp());
     zip.file('index_bridge.php', generateCpanelIndexBridgePhp());
-    zip.file('README_CPANEL.md', generatePleskReadme());
-    zip.file('PANDUAN_HOSTING_CPANEL.txt', generatePleskReadme());
+    zip.file('README_CPANEL.md', generateCpanelReadme());
+    zip.file('PANDUAN_HOSTING_CPANEL.txt', generateCpanelReadme());
     zip.file('PANDUAN_AKSES_FOLDER_LUAR_PUBLIC_HTML.txt', generateCpanelFolderGuide());
 
     // 2. Folder api/
@@ -7528,6 +7526,13 @@ const handleExportCpanelZip = async (req: any, res: any) => {
       apiFolder.file('backup-restore-snapshot.php', generateApiBackupRestoreSnapshotPhp());
       apiFolder.file('backup-delete-snapshot.php', generateApiBackupDeleteSnapshotPhp());
       apiFolder.file('backup-export-csv.php', generateApiBackupExportCsvPhp());
+      apiFolder.file('export-cpanel-zip.php', generateApiExportZipPhp());
+      apiFolder.file('export-zip.php', generateApiExportZipPhp());
+      apiFolder.file('export-plesk-zip.php', generateApiExportZipPhp());
+      apiFolder.file('backup-full.php', generatePleskApiBackupZip());
+      apiFolder.file('admin-profile.php', generateApiAdminProfilePhp());
+      apiFolder.file('admin-update-profile.php', generateApiAdminProfilePhp());
+      apiFolder.file('admin-update-password.php', generateApiAdminProfilePhp());
       apiFolder.file('db_config.php', generatePleskDbConfigPhp());
     }
 

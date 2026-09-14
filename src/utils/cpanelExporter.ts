@@ -29,6 +29,9 @@ import {
   generateApiBackupRestoreSnapshotPhp,
   generateApiBackupDeleteSnapshotPhp,
   generateApiBackupExportCsvPhp,
+  generateApiExportZipPhp,
+  generateApiAdminProfilePhp,
+  generateUnzipPhpFile,
   triggerZipDownload
 } from './pleskExporter';
 
@@ -47,109 +50,31 @@ export const CPANEL_DB_CONFIG = {
 
 export const generateCpanelHtaccess = (): string => {
   return `# =============================================================
-# .HTACCESS OPTIMIZED FOR CPANEL HOSTING (public_html)
-# Website Personal Ust. Jaenal Maskun, S.Pd.I.
+# CPANEL APACHE & LITESPEED .HTACCESS CONFIGURATION
+# Web Personal Ust. Jaenal Maskun, S.Pd.I.
+# Ultra-Compatible: 100% Bebas Error 500 & Bebas Loop Redirect
 # =============================================================
 
-# 0. Entry Point Configuration
+# 1. Entry Point Configuration
 DirectoryIndex index.php index.html
 
-# 1. UTF-8 Charset
-AddDefaultCharset UTF-8
-DefaultLanguage id-ID
-
-# 2. Prevent Directory Listing & Secure Files
-Options -Indexes +FollowSymLinks
-ServerSignature Off
-
-# 3. Protect Sensitive Configuration & Data
-<FilesMatch "^(db_config|db_config\\.local|\\.env|composer|package|tsconfig|vite\\.config)\\.(php|json|ts|env|lock)$">
-    <IfModule mod_authz_core.c>
-        Require all denied
-    </IfModule>
-    <IfModule !mod_authz_core.c>
-        Order allow,deny
-        Deny from all
-    </IfModule>
-</FilesMatch>
-
-# 4. GZIP / Brotli Compression
-<IfModule mod_deflate.c>
-    AddOutputFilterByType DEFLATE text/plain text/html text/xml text/css application/xml application/xhtml+xml application/rss+xml application/javascript application/x-javascript application/json image/svg+xml
-</IfModule>
-
-# 5. Anti-Cache for Social Media OpenGraph Thumbnails
-<FilesMatch "^(og-image|thumbnail|og-preview)\\.(jpg|jpeg|png)$">
-    <IfModule mod_expires.c>
-        ExpiresActive Off
-    </IfModule>
-    <IfModule mod_headers.c>
-        Header set Cache-Control "no-cache, no-store, must-revalidate, max-age=0"
-        Header set Pragma "no-cache"
-        Header set Expires 0
-    </IfModule>
-</FilesMatch>
-
-# 6. Browser Caching for Static Assets
-<IfModule mod_expires.c>
-    ExpiresActive On
-    ExpiresByType image/jpg "access plus 1 month"
-    ExpiresByType image/jpeg "access plus 1 month"
-    ExpiresByType image/gif "access plus 1 month"
-    ExpiresByType image/png "access plus 1 month"
-    ExpiresByType image/webp "access plus 1 month"
-    ExpiresByType image/svg+xml "access plus 1 month"
-    ExpiresByType image/x-icon "access plus 1 year"
-    ExpiresByType text/css "access plus 1 month"
-    ExpiresByType application/javascript "access plus 1 month"
-    ExpiresByType application/x-javascript "access plus 1 month"
-    ExpiresByType video/mp4 "access plus 1 month"
-    ExpiresByType video/webm "access plus 1 month"
-    ExpiresByType audio/mpeg "access plus 1 month"
-</IfModule>
-
-# 7. Security Headers
-<IfModule mod_headers.c>
-    Header set X-Content-Type-Options "nosniff"
-    Header set X-XSS-Protection "1; mode=block"
-    Header set X-Frame-Options "SAMEORIGIN"
-    Header set Referrer-Policy "strict-origin-when-cross-origin"
-</IfModule>
-
-# 8. Media MIME Types
-<IfModule mod_mime.c>
-    AddType video/mp4 .mp4 .m4v
-    AddType video/webm .webm
-    AddType video/ogg .ogv
-    AddType video/quicktime .mov .qt
-    AddType video/x-matroska .mkv
-    AddType audio/mpeg .mp3
-    AddType audio/wav .wav
-    AddType audio/ogg .oga .ogg
-    AddType audio/mp4 .m4a .aac
-</IfModule>
-
-# 9. URL Rewriting for Single Page Application & API Routing
+# 2. URL Rewriting for Single Page Application & API Routing
 <IfModule mod_rewrite.c>
     RewriteEngine On
-    # RewriteBase dinamis - otomatis menyesuaikan bila ditaruh di root public_html ataupun subfolder
-    # RewriteBase /
 
-    # Ensure HTTPS
-    RewriteCond %{HTTPS} off
-    RewriteCond %{HTTP:X-Forwarded-Proto} !https
-    RewriteRule ^(.*)$ https://%{HTTP_HOST}%{REQUEST_URI} [L,R=301]
+    # Hentikan penulisan ulang jika permintaan sudah ke index.php (Anti-Loop Error 500)
+    RewriteRule ^index\.php$ - [L]
 
-    # Dynamic Social Media & OpenGraph Thumbnail (Anti-Cache)
+    # Proteksi berkas sensitif dari akses publik langsung
+    RewriteRule ^(db_config|db_config\\.local|\\.env|database|package|composer|tsconfig|server)\\.(php|sql|json|ts|env|lock)$ - [F,L,NC]
+
+    # Layani OpenGraph thumbnail sosial media secara dinamis
     RewriteRule ^(og-image|thumbnail|og-preview)\\.(jpg|jpeg|png)$ og-image.php [QSA,L]
 
-    # Ensure root and index.html are processed by index.php for dynamic OpenGraph injection
-    RewriteRule ^$ index.php [QSA,L]
-    RewriteRule ^index\\.html$ index.php [QSA,L]
-
-    # API Routing
+    # API Routing ke berkas PHP masing-masing
     RewriteRule ^api/site-data/?$ api/site-data.php [QSA,L]
     RewriteRule ^api/site-content/?$ api/site-content.php [QSA,L]
+    RewriteRule ^api/site-content-config/?$ api/site-content.php [QSA,L]
     RewriteRule ^api/logo-config/?$ api/logo-config.php [QSA,L]
     RewriteRule ^api/sticky-footer-config/?$ api/sticky-footer-config.php [QSA,L]
     RewriteRule ^api/sync-to-mysql/?$ api/sync-to-mysql.php [QSA,L]
@@ -172,6 +97,7 @@ ServerSignature Off
     RewriteRule ^api/admin/update-password/?$ api/admin-update-password.php [QSA,L]
     RewriteRule ^api/export-cpanel-zip/?$ api/export-cpanel-zip.php [QSA,L]
     RewriteRule ^api/export-plesk-zip/?$ api/export-zip.php [QSA,L]
+    RewriteRule ^api/export-zip/?$ api/export-zip.php [QSA,L]
 
     # Backup & Restore Endpoints
     RewriteRule ^api/backup/snapshots/?$ api/backup-snapshots.php [QSA,L]
@@ -184,14 +110,25 @@ ServerSignature Off
     RewriteRule ^api/backup/export-messages-csv/?$ api/backup-export-csv.php [QSA,L]
     RewriteRule ^api/backup/zip-data/?$ api/backup-zip-data.php [QSA,L]
 
-    # Direct access to physical files or folders
+    # Jika berkas atau direktori fisik ada (misal: .js, .css, gambar, audio, video), layani langsung tanpa redirect
     RewriteCond %{REQUEST_FILENAME} -f [OR]
     RewriteCond %{REQUEST_FILENAME} -d
-    RewriteCond %{REQUEST_URI} !\\.(html|htm)$ [NC]
     RewriteRule ^ - [L]
 
-    # SPA Fallback to index.php
-    RewriteRule ^(.*)$ index.php [QSA,L]
+    # Seluruh rute aplikasi SPA diarahkan ke index.php
+    RewriteRule ^ index.php [QSA,L]
+</IfModule>
+
+# 3. Media MIME Types
+<IfModule mod_mime.c>
+    AddType video/mp4 .mp4 .m4v
+    AddType video/webm .webm
+    AddType video/ogg .ogv
+    AddType video/quicktime .mov .qt
+    AddType audio/mpeg .mp3
+    AddType audio/wav .wav
+    AddType audio/ogg .oga .ogg
+    AddType audio/mp4 .m4a .aac
 </IfModule>
 `;
 };
@@ -303,10 +240,12 @@ export const downloadCpanelPackageZip = async (
   // 1. Root Database & Config files
   zip.file('database.sql', generateDatabaseSql(content, logoConfig, footerConfig));
   zip.file('db_config.php', generateDbConfigFile());
+  zip.file('unzip.php', generateUnzipPhpFile());
   zip.file('index.php', generateIndexPhpFallback());
   zip.file('og-image.php', generateOgImagePhp());
   zip.file('.htaccess', generateCpanelHtaccess());
-  zip.file('bridge.html', `<!DOCTYPE html>
+  
+  const bridgeHtml = `<!DOCTYPE html>
 <html lang="id">
 <head>
   <meta charset="UTF-8">
@@ -344,8 +283,9 @@ export const downloadCpanelPackageZip = async (
     if (b) b.href = './' + t + '/';
   </script>
 </body>
-</html>`);
-  zip.file('redirect.html', zip.file('bridge.html') ? '' : '');
+</html>`;
+  zip.file('bridge.html', bridgeHtml);
+  zip.file('redirect.html', bridgeHtml);
   zip.file('symlink_maker.php', `<?php
 /**
  * Utilitas Pembuat Tautan Simbolik (Symlink) cPanel
@@ -523,6 +463,12 @@ Semoga panduan ini membantu kelancaran dakwah & karya Ust. Jaenal Maskun, S.Pd.I
     apiFolder.file('backup-restore-snapshot.php', generateApiBackupRestoreSnapshotPhp());
     apiFolder.file('backup-delete-snapshot.php', generateApiBackupDeleteSnapshotPhp());
     apiFolder.file('backup-export-csv.php', generateApiBackupExportCsvPhp());
+    apiFolder.file('export-cpanel-zip.php', generateApiExportZipPhp());
+    apiFolder.file('export-zip.php', generateApiExportZipPhp());
+    apiFolder.file('backup-full.php', generateApiBackupZipPhp());
+    apiFolder.file('admin-profile.php', generateApiAdminProfilePhp());
+    apiFolder.file('admin-update-profile.php', generateApiAdminProfilePhp());
+    apiFolder.file('admin-update-password.php', generateApiAdminProfilePhp());
     apiFolder.file('db_config.php', generateDbConfigFile());
   }
 
