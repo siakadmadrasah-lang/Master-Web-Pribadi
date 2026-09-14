@@ -108,9 +108,16 @@ export default function App() {
     try {
       const saved = localStorage.getItem('madrasah_site_content_config');
       if (saved) {
-        localSaved = mergeSiteContent(JSON.parse(saved));
-        const ts = localStorage.getItem('madrasah_last_updated');
-        if (ts) localTs = parseInt(ts, 10) || 0;
+        // Proteksi OOM Mobile: Jangan muat string Base64 raksasa ke dalam state awal
+        if (saved.length > 250000 || saved.includes('data:image/') || saved.includes('data:')) {
+          console.warn('Proteksi Memori: Membersihkan cache lokal yang terlalu besar.');
+          localStorage.removeItem('madrasah_site_content_config');
+          localStorage.removeItem('madrasah_last_updated');
+        } else {
+          localSaved = mergeSiteContent(JSON.parse(saved));
+          const ts = localStorage.getItem('madrasah_last_updated');
+          if (ts) localTs = parseInt(ts, 10) || 0;
+        }
       }
     } catch (e) {
       console.warn('Error reading saved site content from storage', e);

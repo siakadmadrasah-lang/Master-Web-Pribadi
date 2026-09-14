@@ -875,9 +875,7 @@ export const Navbar: React.FC<NavbarProps> = ({
             <div className="space-y-2">
               <button
                 onClick={() => {
-                  const targetBaseUrl = (typeof window !== 'undefined' && window.location.hostname.includes('jaenalmaskun.biz.id'))
-                    ? window.location.origin
-                    : (typeof window !== 'undefined' && window.location.origin ? window.location.origin : 'https://jaenalmaskun.biz.id');
+                  const targetBaseUrl = typeof window !== 'undefined' && window.location.origin ? window.location.origin : 'https://jaenalmaskun.biz.id';
                   const targetUrl = `${targetBaseUrl}/?v=${Math.floor(shareTime / 1000)}`;
                   const shareText = encodeURIComponent(
                     `*${shareSettings?.title || `${activeProfile.title || activeProfile.name} - Website Resmi`}*\n` +
@@ -894,9 +892,7 @@ export const Navbar: React.FC<NavbarProps> = ({
 
               <button
                 onClick={() => {
-                  const targetBaseUrl = (typeof window !== 'undefined' && window.location.hostname.includes('jaenalmaskun.biz.id'))
-                    ? window.location.origin
-                    : (typeof window !== 'undefined' && window.location.origin ? window.location.origin : 'https://jaenalmaskun.biz.id');
+                  const targetBaseUrl = typeof window !== 'undefined' && window.location.origin ? window.location.origin : 'https://jaenalmaskun.biz.id';
                   const targetUrl = `${targetBaseUrl}/?v=${Math.floor(shareTime / 1000)}`;
                   navigator.clipboard.writeText(targetUrl);
                   setCopiedLink(true);

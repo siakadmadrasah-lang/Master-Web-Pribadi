@@ -1,9 +1,9 @@
 {
   "siteContent": {
     "profile": {
-      "name": "Ust. Jaenal Maskun, S.Pd.I.",
+      "name": "Ust. Jaenal Arifin, S.Pd.I",
       "arabicName": "الأستاذ زين الماسكون",
-      "title": " Jaenal Maskun, S.Pd.I.",
+      "title": "Guru & Pendakwah",
       "degrees": "S.Pd.I.",
       "role": "Pendidik, Akademisi & Dev APP Madrasah",
       "institution": "MI Ma'arif NU 2 Sanggreman",
@@ -13,7 +13,7 @@
       "location": "Gentawangi, Indonesia",
       "email": "jaenalmaskun.ai@gmail.com",
       "phone": "+62 812-3456-7890",
-      "avatarUrl": "",
+      "avatarUrl": "/uploads/avatar_1787051686042_07hu2t.jpg",
       "socials": {
         "whatsapp": "https://wa.me/6281234567890",
         "youtube": "https://www.youtube.com/@jaenalmaskunofficial3977",
@@ -43,6 +43,15 @@
           "subtext": "Alumni Berprestasi"
         }
       ]
+    },
+    "heroSettings": {
+      "badgeText": "Guru",
+      "greetingTitle": "Assalamu’alaikum Warahmatullahi Wabarakatuh",
+      "greetingSub": "Khidmat untuk Pendidikan Islam & Literasi Madrasah",
+      "showStats": true,
+      "showDownloadCV": true,
+      "heroImage": "/uploads/hero_1788506992540_nmuha6.jpg",
+      "photoBadgeText": "Pejuang MI"
     },
     "education": [
       {
@@ -706,6 +715,17 @@
         "isPrimary": false
       }
     ],
+    "agendaCategories": [
+      "Semua Agenda",
+      "Kajian Kitab",
+      "Pelatihan Guru",
+      "Seminar Nasional",
+      "Bimbingan Santri",
+      "Workshop Kurikulum",
+      "Kajian Rutin",
+      "Tabligh Akbar",
+      "Halaqah Ilmiah"
+    ],
     "visibility": {
       "hero": true,
       "about": true,
@@ -718,19 +738,10 @@
       "youtubeChannel": true,
       "contact": true
     },
-    "heroSettings": {
-      "badgeText": "Guru",
-      "greetingTitle": "Assalamu’alaikum Warahmatullahi Wabarakatuh",
-      "greetingSub": "Khidmat untuk Pendidikan Islam & Literasi Madrasah",
-      "showStats": true,
-      "showDownloadCV": true,
-      "heroImage": "",
-      "photoBadgeText": "Pejuang MI"
-    },
     "shareSettings": {
       "title": "Jaenal Maskun, S.Pd.I. | Pendidik, Akademisi & Penggerak Madrasah",
       "description": "Website Resmi Jaenal Maskun, S.Pd.I. - Menyemai Adab, Menumbuhkan Intelektual, Mengabdi untuk Kemuliaan Umat. Eksplorasi profil, modul pembelajaran madrasah, tasbih digital, dan agenda kajian.",
-      "thumbnailUrl": "/og-image.jpg?v=1787035370",
+      "thumbnailUrl": "/uploads/thumbnail_1787007893613.png",
       "authorName": "Jaenal Maskun, S.Pd.I.",
       "badgeText": "Website Resmi Madrasah"
     }
@@ -757,8 +768,6 @@
   },
   "stickyFooterConfig": {
     "enabled": true,
-    "showOnDesktop": true,
-    "showOnMobile": true,
     "position": "floating",
     "theme": "emerald_gold",
     "maxWidth": "max-w-4xl",
@@ -830,7 +839,9 @@
         "visible": true,
         "badgeText": "Modul KBC"
       }
-    ]
+    ],
+    "showOnDesktop": true,
+    "showOnMobile": true
   },
-  "lastUpdated": 1788507022978
+  "lastUpdated": 1789361804406
 }

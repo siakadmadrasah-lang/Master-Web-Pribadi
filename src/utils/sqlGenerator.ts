@@ -3,8 +3,8 @@ import { defaultSiteContent } from '../data/personalData';
 
 export const DEFAULT_DB_CONFIG = {
   host: 'localhost',
-  user: 'jaenal_masterweb',
-  database: 'jaenal_masterweb',
+  user: 'denbagus_webpersonal',
+  database: 'denbagues_webpersonal',
   password: 'masbagus15',
   port: 3306,
   charset: 'utf8mb4',
@@ -154,9 +154,10 @@ CREATE TABLE IF NOT EXISTS \`site_settings\` (
   PRIMARY KEY (\`id\`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
--- Auto-Protect: Jangan pernah menimpa site_data yang sudah ada di database MySQL server live
-INSERT IGNORE INTO \`site_settings\` (\`setting_key\`, \`setting_value\`) VALUES
-('site_data', '${escapeSql(JSON.stringify({ siteContent: content, logoConfig: logoConfig || {}, stickyFooterConfig: footerConfig || {}, lastUpdated: Date.now() }))}');
+-- Sinkronisasi Pengaturan Situs (Mendukung restore data)
+INSERT INTO \`site_settings\` (\`setting_key\`, \`setting_value\`) VALUES
+('site_data', '${escapeSql(JSON.stringify({ siteContent: content, logoConfig: logoConfig || {}, stickyFooterConfig: footerConfig || {}, lastUpdated: Date.now() }))}')
+ON DUPLICATE KEY UPDATE \`setting_value\` = VALUES(\`setting_value\`);
 
 -- --------------------------------------------------------
 -- Struktur Tabel: \`site_configs\` (Konfigurasi Logo & Sticky Footer)
@@ -168,11 +169,12 @@ CREATE TABLE IF NOT EXISTS \`site_configs\` (
   PRIMARY KEY (\`config_key\`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
--- Seed Konfigurasi Terkini (Hanya insert jika belum ada)
-INSERT IGNORE INTO \`site_configs\` (\`config_key\`, \`config_value\`) VALUES
+-- Sinkronisasi Konfigurasi (Mendukung restore data)
+INSERT INTO \`site_configs\` (\`config_key\`, \`config_value\`) VALUES
 ('site_content', '${escapeSql(JSON.stringify(content))}'),
 ('header_logo', '${escapeSql(JSON.stringify(logoConfig || {}))}'),
-('sticky_footer', '${escapeSql(JSON.stringify(footerConfig || {}))}');
+('sticky_footer', '${escapeSql(JSON.stringify(footerConfig || {}))}')
+ON DUPLICATE KEY UPDATE \`config_value\` = VALUES(\`config_value\`);
 
 COMMIT;
 `;

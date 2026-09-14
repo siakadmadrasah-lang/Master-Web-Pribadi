@@ -72,18 +72,35 @@ export async function convertUrlToBase64(url: string, timeoutMs = 4500): Promise
         img.onload = () => {
           clearTimeout(timer);
           try {
+            const rawW = img.naturalWidth || img.width || 400;
+            const rawH = img.naturalHeight || img.height || 400;
+
+            // Safe guard against huge phone camera resolutions causing mobile browser OOM crash
+            const MAX_DIM = 1280;
+            let targetW = rawW;
+            let targetH = rawH;
+            if (targetW > MAX_DIM || targetH > MAX_DIM) {
+              if (targetW > targetH) {
+                targetH = Math.round((targetH * MAX_DIM) / targetW);
+                targetW = MAX_DIM;
+              } else {
+                targetW = Math.round((targetW * MAX_DIM) / targetH);
+                targetH = MAX_DIM;
+              }
+            }
+
             const canvas = document.createElement('canvas');
-            canvas.width = img.naturalWidth || img.width || 400;
-            canvas.height = img.naturalHeight || img.height || 400;
+            canvas.width = targetW;
+            canvas.height = targetH;
             const ctx = canvas.getContext('2d');
             if (!ctx) return resolve(trimmed);
-            ctx.drawImage(img, 0, 0);
+            ctx.drawImage(img, 0, 0, targetW, targetH);
 
             let mime = 'image/jpeg';
             if (trimmed.toLowerCase().endsWith('.png')) mime = 'image/png';
             else if (trimmed.toLowerCase().endsWith('.webp')) mime = 'image/webp';
 
-            const generated = canvas.toDataURL(mime, 0.9);
+            const generated = canvas.toDataURL(mime, 0.8);
             resolve(generated);
           } catch (e) {
             resolve(trimmed);

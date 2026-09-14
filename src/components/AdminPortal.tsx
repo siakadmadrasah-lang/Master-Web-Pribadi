@@ -211,9 +211,9 @@ export const AdminPortal: React.FC<AdminPortalProps> = ({
   } | null>(null);
   const [dbConfigForm, setDbConfigForm] = useState({
     host: DEFAULT_DB_CONFIG.host || 'localhost',
-    user: DEFAULT_DB_CONFIG.user || 'jaenal_masterweb',
+    user: DEFAULT_DB_CONFIG.user || 'denbagus_webpersonal',
     password: DEFAULT_DB_CONFIG.password || 'masbagus15',
-    database: DEFAULT_DB_CONFIG.database || 'jaenal_masterweb',
+    database: DEFAULT_DB_CONFIG.database || 'denbagues_webpersonal',
     port: '3306',
   });
   const [isTestingDb, setIsTestingDb] = useState(false);
@@ -1116,21 +1116,34 @@ export const AdminPortal: React.FC<AdminPortalProps> = ({
         });
         const data = await res.json();
         if (res.ok && data.url) {
-          finalThumbnailUrl = data.url;
-          setDraftShare(prev => ({ ...prev, thumbnailUrl: data.url }));
+          finalThumbnailUrl = `${data.url}?v=${Date.now()}`;
+          setDraftShare(prev => ({ ...prev, thumbnailUrl: finalThumbnailUrl }));
         }
       } catch (err) {
         console.warn('Error syncing thumbnail before save:', err);
       }
     }
 
+    const updatedShare = {
+      ...draftShare,
+      thumbnailUrl: finalThumbnailUrl
+    };
+
+    // Dedicated /api/share-settings call for robust server persistence
+    try {
+      await fetch('/api/share-settings', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ shareSettings: updatedShare })
+      });
+    } catch (e) {
+      console.warn('Error calling /api/share-settings:', e);
+    }
+
     if (onSaveSiteContent) {
       const updated = {
         ...siteContent,
-        shareSettings: {
-          ...draftShare,
-          thumbnailUrl: finalThumbnailUrl
-        },
+        shareSettings: updatedShare,
       };
       onSaveSiteContent(updated);
     }
@@ -1165,14 +1178,26 @@ export const AdminPortal: React.FC<AdminPortalProps> = ({
         });
         const data = await res.json();
         if (res.ok && data.success && data.url) {
-          setDraftShare(prev => ({ ...prev, thumbnailUrl: data.url }));
+          const freshThumbnailUrl = `${data.url}?v=${Date.now()}`;
+          const updatedShare = {
+            ...draftShare,
+            thumbnailUrl: freshThumbnailUrl
+          };
+          setDraftShare(updatedShare);
+
+          // Immediately persist to /api/share-settings as well
+          try {
+            await fetch('/api/share-settings', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ shareSettings: updatedShare })
+            });
+          } catch (e) {}
+
           if (onSaveSiteContent) {
             onSaveSiteContent({
               ...siteContent,
-              shareSettings: {
-                ...draftShare,
-                thumbnailUrl: data.url
-              }
+              shareSettings: updatedShare
             });
           }
           showToast('✅ Thumbnail berhasil diunggah & aktif sebagai banner medsos!');
@@ -1199,11 +1224,11 @@ export const AdminPortal: React.FC<AdminPortalProps> = ({
   };
 
   const handleShareToWhatsApp = () => {
-    const shareUrl = (typeof window !== 'undefined' && window.location.hostname.includes('jaenalmaskun.biz.id'))
-      ? `${window.location.origin}/?v=1`
-      : 'https://jaenalmaskun.biz.id/?v=1';
+    const origin = typeof window !== 'undefined' && window.location.origin ? window.location.origin : 'https://jaenalmaskun.biz.id';
+    const timestamp = Math.floor(Date.now() / 1000);
+    const shareUrl = `${origin}/?v=${timestamp}`;
     const text = encodeURIComponent(
-      `*${draftShare.title}*\n\n${draftShare.description}\n\nKunjungi website resmi: ${shareUrl}`
+      `*${draftShare.title || 'Website Resmi Ust. Jaenal Maskun, S.Pd.I.'}*\n\n${draftShare.description || 'Menyemai Adab, Menumbuhkan Intelektual, Mengabdi untuk Kemuliaan Umat.'}\n\nKunjungi website resmi: ${shareUrl}`
     );
     window.open(`https://api.whatsapp.com/send?text=${text}`, '_blank');
   };
@@ -1496,7 +1521,7 @@ export const AdminPortal: React.FC<AdminPortalProps> = ({
       const url = URL.createObjectURL(blob);
       const link = document.createElement('a');
       link.href = url;
-      link.setAttribute('download', 'jaenal_masterweb_database.sql');
+      link.setAttribute('download', 'denbagues_webpersonal_database.sql');
       document.body.appendChild(link);
       link.click();
       document.body.removeChild(link);
@@ -1605,6 +1630,19 @@ export const AdminPortal: React.FC<AdminPortalProps> = ({
         <div className="flex items-center gap-2 sm:gap-3">
           {isLoggedIn && (
             <>
+              {/* ⚡ Tombol Update Langsung ke MySQL (Anti Bolak-Balik Unggah ZIP) */}
+              <button
+                id="admin-header-sync-mysql-btn"
+                type="button"
+                onClick={handleSyncToMysql}
+                disabled={isSyncingToDb}
+                className="px-3.5 py-1.5 rounded-xl bg-gradient-to-r from-emerald-500 to-teal-500 hover:from-emerald-400 hover:to-teal-400 text-white text-xs font-black flex items-center gap-1.5 border border-emerald-300 shadow-md transition-all active:scale-95 cursor-pointer disabled:opacity-50"
+                title="Simpan & update langsung seluruh perubahan ke Database MySQL tanpa perlu unggah ulang ZIP cPanel"
+              >
+                <RefreshCw className={`w-3.5 h-3.5 text-amber-300 ${isSyncingToDb ? 'animate-spin' : ''}`} />
+                <span>{isSyncingToDb ? 'Menyinkronkan...' : '⚡ Update ke MySQL'}</span>
+              </button>
+
               {/* Quick Website Preview / Back to site */}
               <button
                 type="button"
@@ -1844,13 +1882,26 @@ export const AdminPortal: React.FC<AdminPortalProps> = ({
               </span>
             </button>
 
+            {/* Direct 1-Click Update ke Database MySQL Button in Sub-Header Menu */}
+            <button
+              id="admin-navbar-quick-sync-mysql-btn"
+              type="button"
+              onClick={handleSyncToMysql}
+              disabled={isSyncingToDb}
+              className="px-3.5 py-1.5 rounded-xl text-xs font-black flex items-center gap-1.5 transition-all cursor-pointer active:scale-95 bg-gradient-to-r from-emerald-500 via-teal-400 to-emerald-500 hover:from-emerald-400 hover:to-teal-300 text-slate-950 shadow-md border border-emerald-300 animate-pulse hover:animate-none"
+              title="Kirim dan sinkronisasi seluruh perubahan langsung ke Database MySQL tanpa perlu unggah file ZIP lagi"
+            >
+              <RefreshCw className={`w-3.5 h-3.5 ${isSyncingToDb ? 'animate-spin' : ''}`} />
+              <span>{isSyncingToDb ? 'Menyinkronkan...' : '⚡ Update ke MySQL'}</span>
+            </button>
+
             {/* Direct 1-Click Unduh ZIP cPanel Button in Sub-Header Menu */}
             <button
               id="admin-navbar-quick-cpanel-zip-btn"
               type="button"
               onClick={handleDownloadCpanelZipAdmin}
               disabled={isExportingCpanelAdmin}
-              className="px-3.5 py-1.5 rounded-xl text-xs font-black flex items-center gap-1.5 transition-all cursor-pointer active:scale-95 bg-gradient-to-r from-orange-500 via-amber-400 to-amber-500 hover:from-orange-400 hover:to-amber-300 text-slate-950 shadow-md border border-orange-300 animate-pulse hover:animate-none"
+              className="px-3.5 py-1.5 rounded-xl text-xs font-black flex items-center gap-1.5 transition-all cursor-pointer active:scale-95 bg-gradient-to-r from-orange-500 via-amber-400 to-amber-500 hover:from-orange-400 hover:to-amber-300 text-slate-950 shadow-md border border-orange-300"
               title="Unduh langsung paket ZIP cPanel lengkap untuk diekstrak ke public_html"
             >
               <Download className={`w-3.5 h-3.5 ${isExportingCpanelAdmin ? 'animate-bounce' : ''}`} />
@@ -2056,6 +2107,34 @@ export const AdminPortal: React.FC<AdminPortalProps> = ({
                     >
                       <Edit3 className="w-4 h-4" />
                       <span>Buka Menu Edit Konten</span>
+                    </button>
+                  </div>
+
+                  {/* ⚡ Banner Update Langsung ke Database MySQL (Anti Bolak-Balik Unggah ZIP) */}
+                  <div className="bg-gradient-to-r from-[#052e16] via-[#064e3b] to-[#022c22] p-5 sm:p-6 rounded-3xl border-2 border-emerald-400 shadow-xl text-white flex flex-col md:flex-row items-start md:items-center justify-between gap-4">
+                    <div className="space-y-1.5 max-w-2xl">
+                      <div className="flex items-center gap-2 text-emerald-300 flex-wrap">
+                        <RefreshCw className="w-5 h-5 text-emerald-400" />
+                        <span className="text-xs font-bold uppercase tracking-wider">Sinkronisasi Database Otomatis</span>
+                        <span className="bg-emerald-400 text-emerald-950 text-[10px] font-black px-2 py-0.5 rounded-full shadow-xs">
+                          Anti Bolak-Balik ZIP cPanel
+                        </span>
+                      </div>
+                      <h3 className="text-base sm:text-lg font-bold text-white">
+                        ⚡ Update Langsung ke Database MySQL
+                      </h3>
+                      <p className="text-xs text-emerald-100/90 leading-relaxed">
+                        Setiap kali ada pembaruan profil, modul, karya, atau agenda, klik tombol ini untuk langsung memperbarui isi database MySQL tanpa harus mengunduh dan mengunggah ulang file ZIP cPanel.
+                      </p>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={handleSyncToMysql}
+                      disabled={isSyncingToDb}
+                      className="px-6 py-3.5 rounded-2xl bg-gradient-to-r from-emerald-400 via-teal-300 to-emerald-400 hover:from-emerald-300 hover:to-teal-200 text-slate-950 font-black text-xs sm:text-sm flex items-center justify-center gap-2 shadow-lg transition-all active:scale-95 shrink-0 cursor-pointer disabled:opacity-50 border border-emerald-200"
+                    >
+                      <RefreshCw className={`w-4 h-4 ${isSyncingToDb ? 'animate-spin' : ''}`} />
+                      <span>{isSyncingToDb ? 'Menyinkronkan ke MySQL...' : '⚡ Jalankan Update Sekarang'}</span>
                     </button>
                   </div>
 
@@ -3533,7 +3612,13 @@ export const AdminPortal: React.FC<AdminPortalProps> = ({
                         <div className="space-y-3">
                           <div className="relative aspect-[16/9] w-full rounded-2xl overflow-hidden border-2 border-emerald-800/40 shadow-inner bg-emerald-950">
                             <img
-                              src={draftShare.thumbnailUrl || '/og-image.jpg'}
+                              src={
+                                draftShare.thumbnailUrl
+                                  ? (draftShare.thumbnailUrl.startsWith('data:')
+                                      ? draftShare.thumbnailUrl
+                                      : (draftShare.thumbnailUrl.includes('?') ? draftShare.thumbnailUrl : `${draftShare.thumbnailUrl}?v=${Date.now()}`))
+                                  : '/og-image.jpg'
+                              }
                               alt="Thumbnail Current"
                               className="w-full h-full object-cover"
                               onError={(e) => {
@@ -3570,8 +3655,19 @@ export const AdminPortal: React.FC<AdminPortalProps> = ({
 
                             <button
                               type="button"
-                              onClick={() => {
-                                setDraftShare(prev => ({ ...prev, thumbnailUrl: '/og-image.jpg' }));
+                              onClick={async () => {
+                                const resetShare = { ...draftShare, thumbnailUrl: '/og-image.jpg' };
+                                setDraftShare(resetShare);
+                                try {
+                                  await fetch('/api/share-settings', {
+                                    method: 'POST',
+                                    headers: { 'Content-Type': 'application/json' },
+                                    body: JSON.stringify({ shareSettings: resetShare })
+                                  });
+                                } catch (e) {}
+                                if (onSaveSiteContent) {
+                                  onSaveSiteContent({ ...siteContent, shareSettings: resetShare });
+                                }
                                 showToast('Thumbnail direset ke Banner Islami 1200x630');
                               }}
                               className="px-3 py-2 bg-gray-100 hover:bg-gray-200 text-gray-700 border border-gray-200 rounded-xl text-xs font-semibold text-center transition-colors flex items-center justify-center gap-1.5"
@@ -3583,9 +3679,20 @@ export const AdminPortal: React.FC<AdminPortalProps> = ({
 
                           <button
                             type="button"
-                            onClick={() => {
+                            onClick={async () => {
                               const avatarUrl = siteContent?.profile?.avatarUrl || '/avatar-jaenal.jpg';
-                              setDraftShare(prev => ({ ...prev, thumbnailUrl: avatarUrl }));
+                              const updatedShare = { ...draftShare, thumbnailUrl: avatarUrl };
+                              setDraftShare(updatedShare);
+                              try {
+                                await fetch('/api/share-settings', {
+                                  method: 'POST',
+                                  headers: { 'Content-Type': 'application/json' },
+                                  body: JSON.stringify({ shareSettings: updatedShare })
+                                });
+                              } catch (e) {}
+                              if (onSaveSiteContent) {
+                                onSaveSiteContent({ ...siteContent, shareSettings: updatedShare });
+                              }
                               showToast('Thumbnail disetel ke Foto Profil Utama Pengguna');
                             }}
                             className="w-full px-3 py-1.5 bg-emerald-900/10 hover:bg-emerald-900/20 text-emerald-950 rounded-xl text-xs font-medium text-center transition-colors"
@@ -5977,11 +6084,11 @@ export const AdminPortal: React.FC<AdminPortalProps> = ({
                           <div className="p-3 bg-emerald-50/70 rounded-2xl border border-emerald-200 flex items-center justify-between">
                             <div>
                               <span className="text-[10px] font-bold text-emerald-700 uppercase block">Nama Database (DB Name):</span>
-                              <span className="text-xs font-mono font-bold text-emerald-950">jaenal_masterweb</span>
+                              <span className="text-xs font-mono font-bold text-emerald-950">denbagues_webpersonal</span>
                             </div>
                             <button
                               type="button"
-                              onClick={() => handleCopyText('jaenal_masterweb', 'Nama Database')}
+                              onClick={() => handleCopyText('denbagues_webpersonal', 'Nama Database')}
                               className="p-1.5 rounded-lg text-emerald-700 hover:text-emerald-900 hover:bg-emerald-100 transition-colors"
                               title="Salin Nama DB"
                             >
@@ -5993,11 +6100,11 @@ export const AdminPortal: React.FC<AdminPortalProps> = ({
                           <div className="p-3 bg-emerald-50/70 rounded-2xl border border-emerald-200 flex items-center justify-between">
                             <div>
                               <span className="text-[10px] font-bold text-emerald-700 uppercase block">Username DB (DB User):</span>
-                              <span className="text-xs font-mono font-bold text-emerald-950">jaenal_masterweb</span>
+                              <span className="text-xs font-mono font-bold text-emerald-950">denbagus_webpersonal</span>
                             </div>
                             <button
                               type="button"
-                              onClick={() => handleCopyText('jaenal_masterweb', 'Username DB')}
+                              onClick={() => handleCopyText('denbagus_webpersonal', 'Username DB')}
                               className="p-1.5 rounded-lg text-emerald-700 hover:text-emerald-900 hover:bg-emerald-100 transition-colors"
                               title="Salin Username DB"
                             >
@@ -6101,8 +6208,8 @@ export const AdminPortal: React.FC<AdminPortalProps> = ({
                                 Masuk ke panel kontrol Plesk Anda, pilih menu <strong className="text-emerald-900 font-bold">Databases</strong>, lalu klik <strong className="text-emerald-900 font-bold">Add Database</strong>:
                               </p>
                               <ul className="text-xs text-gray-600 space-y-1 list-disc pl-5">
-                                <li>Database name: <code className="font-mono text-emerald-900 font-bold bg-white px-1 py-0.5 rounded border">jaenal_masterweb</code></li>
-                                <li>Database user: <code className="font-mono text-emerald-900 font-bold bg-white px-1 py-0.5 rounded border">jaenal_masterweb</code></li>
+                                <li>Database name: <code className="font-mono text-emerald-900 font-bold bg-white px-1 py-0.5 rounded border">denbagues_webpersonal</code></li>
+                                <li>Database user: <code className="font-mono text-emerald-900 font-bold bg-white px-1 py-0.5 rounded border">denbagus_webpersonal</code></li>
                                 <li>Password: <code className="font-mono text-amber-900 font-bold bg-white px-1 py-0.5 rounded border">masbagus15</code></li>
                               </ul>
                             </div>
@@ -6256,6 +6363,17 @@ export const AdminPortal: React.FC<AdminPortalProps> = ({
                     <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-3 shrink-0 w-full lg:w-auto">
                       <button
                         type="button"
+                        onClick={handleSyncToMysql}
+                        disabled={isSyncingToDb}
+                        className="px-5 py-3 rounded-2xl bg-gradient-to-r from-emerald-500 via-teal-400 to-emerald-500 hover:from-emerald-400 hover:to-teal-300 text-slate-950 text-xs font-black flex items-center justify-center gap-2 transition-all shadow-lg active:scale-95 cursor-pointer disabled:opacity-50 border border-emerald-300"
+                        title="Simpan & update langsung seluruh perubahan ke Database MySQL tanpa perlu unggah ulang ZIP cPanel"
+                      >
+                        <RefreshCw className={`w-4 h-4 text-slate-950 ${isSyncingToDb ? 'animate-spin' : ''}`} />
+                        <span>{isSyncingToDb ? 'Menyinkronkan...' : '⚡ Update Langsung ke MySQL'}</span>
+                      </button>
+
+                      <button
+                        type="button"
                         onClick={handleDownloadDatabaseSqlAdmin}
                         className="px-4 py-3 rounded-2xl bg-orange-950/90 hover:bg-orange-900 text-orange-300 border border-orange-400/50 text-xs font-bold flex items-center justify-center gap-2 transition-all shadow-sm active:scale-95 cursor-pointer"
                         title="Unduh berkas skrip SQL untuk diimpor ke phpMyAdmin cPanel"
@@ -6363,6 +6481,31 @@ export const AdminPortal: React.FC<AdminPortalProps> = ({
                         </div>
                       </div>
 
+                      {/* Fitur Update Langsung ke Database MySQL (Anti Bolak-Balik ZIP) */}
+                      <div className="bg-gradient-to-br from-[#064e3b] via-[#043327] to-[#022c22] text-white p-6 rounded-3xl border-2 border-emerald-400 shadow-lg space-y-4">
+                        <div className="flex items-center justify-between">
+                          <div className="flex items-center gap-2 text-amber-300">
+                            <RefreshCw className="w-5 h-5 text-emerald-400" />
+                            <h4 className="text-sm font-bold text-white">Update Langsung ke Database MySQL</h4>
+                          </div>
+                          <span className="bg-emerald-400 text-emerald-950 text-[10px] font-black px-2 py-0.5 rounded-full">
+                            Otomatis
+                          </span>
+                        </div>
+                        <p className="text-xs text-emerald-100/90 leading-relaxed">
+                          Tidak perlu bolak-balik mengunduh dan mengunggah berkas ZIP ke cPanel lagi setiap kali ada pembaruan data! Klik tombol di bawah untuk langsung menyinkronkan seluruh konten terbaru ke database MySQL di hosting Anda.
+                        </p>
+                        <button
+                          type="button"
+                          onClick={handleSyncToMysql}
+                          disabled={isSyncingToDb}
+                          className="w-full py-3 px-4 rounded-xl bg-gradient-to-r from-emerald-400 via-teal-300 to-emerald-400 hover:from-emerald-300 hover:to-teal-200 text-slate-950 text-xs font-black flex items-center justify-center gap-2 shadow-md transition-all active:scale-95 cursor-pointer disabled:opacity-50"
+                        >
+                          <RefreshCw className={`w-4 h-4 ${isSyncingToDb ? 'animate-spin' : ''}`} />
+                          <span>{isSyncingToDb ? 'Menyinkronkan ke Database...' : '⚡ Jalankan Update ke MySQL Sekarang'}</span>
+                        </button>
+                      </div>
+
                       {/* Direct Server Download Card */}
                       <div className="bg-gradient-to-br from-[#431407] to-[#1c1917] text-white p-6 rounded-3xl border-2 border-orange-400/80 shadow-md space-y-4">
                         <div className="flex items-center gap-2 text-orange-300">
@@ -6431,7 +6574,7 @@ export const AdminPortal: React.FC<AdminPortalProps> = ({
                                 Buka cPanel hosting Anda, cari menu <strong>MySQL® Databases</strong> atau <strong>MySQL Database Wizard</strong>:
                               </p>
                               <ul className="text-xs text-gray-700 space-y-1 list-disc pl-5">
-                                <li>Buat nama database baru (misal: <code>jaenal_masterweb</code>).</li>
+                                <li>Buat nama database baru (misal: <code>denbagues_webpersonal</code>).</li>
                                 <li>Buat pengguna database (user) dan tentukan kata sandi yang kuat.</li>
                                 <li>Hubungkan pengguna ke database dan centang <strong>ALL PRIVILEGES</strong>.</li>
                               </ul>

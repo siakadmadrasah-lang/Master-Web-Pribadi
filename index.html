@@ -3,6 +3,35 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <!-- Memory Guard & Self-Healing Cache Cleaner for Android / Mobile Devices -->
+    <script>
+      (function() {
+        try {
+          var href = window.location.href;
+          if (href.indexOf('clean=1') !== -1 || href.indexOf('reset=1') !== -1 || href.indexOf('clear=1') !== -1) {
+            localStorage.clear();
+            if (window.history && window.history.replaceState) {
+              window.history.replaceState({}, document.title, window.location.pathname);
+            }
+            return;
+          }
+          // Prevent mobile browser OOM crash from oversized localStorage data (> 250KB or raw base64)
+          var localData = localStorage.getItem('madrasah_site_content_config');
+          if (localData && (localData.length > 250000 || localData.indexOf('data:image/') !== -1 || localData.indexOf('data:') !== -1)) {
+            localStorage.removeItem('madrasah_site_content_config');
+            localStorage.removeItem('madrasah_last_updated');
+          }
+          var localLogo = localStorage.getItem('madrasah_custom_header_logo');
+          if (localLogo && (localLogo.length > 100000 || localLogo.indexOf('data:image/') !== -1)) {
+            localStorage.removeItem('madrasah_custom_header_logo');
+          }
+          var localFooter = localStorage.getItem('madrasah_sticky_footer_config');
+          if (localFooter && localFooter.length > 100000) {
+            localStorage.removeItem('madrasah_sticky_footer_config');
+          }
+        } catch(e) {}
+      })();
+    </script>
     <title>Ust. Jaenal Maskun, S.Pd.I. | Pendidik, Akademisi & Penggerak Madrasah</title>
     <meta name="description" content="Website Resmi Ust. Jaenal Maskun, S.Pd.I. - Menyemai Adab, Menumbuhkan Intelektual, Mengabdi untuk Kemuliaan Umat. Profil, karya ilmiah, modul pembelajaran madrasah, tasbih digital, dan agenda kajian." />
     <meta name="keywords" content="Jaenal Maskun, Ust Jaenal Maskun, Madrasah, Pendidikan Islam, Kurikulum Madrasah, Karya Ilmiah, Modul Ajar, Tasbih Digital, Agenda Kajian" />
@@ -19,11 +48,11 @@
     <!-- Open Graph / WhatsApp / Facebook Meta Tags -->
     <meta property="og:type" content="website" />
     <meta property="og:site_name" content="Website Resmi Ust. Jaenal Maskun" />
-    <meta property="og:url" content="https://jaenalmaskun.biz.id/" />
+    <meta property="og:url" content="/" />
     <meta property="og:title" content="Ust. Jaenal Maskun, S.Pd.I. | Pendidik, Akademisi & Penggerak Madrasah" />
     <meta property="og:description" content="Menyemai Adab, Menumbuhkan Intelektual, Mengabdi untuk Kemuliaan Umat. Eksplorasi profil, modul pembelajaran, karya ilmiah, dan agenda kajian." />
-    <meta property="og:image" content="https://jaenalmaskun.biz.id/og-image.jpg" />
-    <meta property="og:image:secure_url" content="https://jaenalmaskun.biz.id/og-image.jpg" />
+    <meta property="og:image" content="/og-image.jpg" />
+    <meta property="og:image:secure_url" content="/og-image.jpg" />
     <meta property="og:image:type" content="image/jpeg" />
     <meta property="og:image:width" content="1200" />
     <meta property="og:image:height" content="630" />
@@ -32,11 +61,11 @@
 
     <!-- Twitter / X Meta Tags -->
     <meta name="twitter:card" content="summary_large_image" />
-    <meta name="twitter:url" content="https://jaenalmaskun.biz.id/" />
+    <meta name="twitter:url" content="/" />
     <meta name="twitter:title" content="Ust. Jaenal Maskun, S.Pd.I. | Pendidik, Akademisi & Penggerak Madrasah" />
     <meta name="twitter:description" content="Menyemai Adab, Menumbuhkan Intelektual, Mengabdi untuk Kemuliaan Umat. Eksplorasi profil, modul pembelajaran madrasah, tasbih digital, dan agenda kajian." />
-    <meta name="twitter:image" content="https://jaenalmaskun.biz.id/og-image.jpg" />
-    <meta name="twitter:image:src" content="https://jaenalmaskun.biz.id/og-image.jpg" />
+    <meta name="twitter:image" content="/og-image.jpg" />
+    <meta name="twitter:image:src" content="/og-image.jpg" />
     <meta name="twitter:image:alt" content="Ust. Jaenal Maskun Portofolio Madrasah" />
 
     <!-- Schema.org, Discord & Search Engines Thumbnail Tags -->

@@ -696,7 +696,7 @@ export const defaultSiteContent: SiteContentConfig = {
   shareSettings: {
     title: 'Jaenal Maskun, S.Pd.I. | Pendidik, Akademisi & Penggerak Madrasah',
     description: 'Website Resmi Jaenal Maskun, S.Pd.I. - Menyemai Adab, Menumbuhkan Intelektual, Mengabdi untuk Kemuliaan Umat. Eksplorasi profil, modul pembelajaran madrasah, tasbih digital, dan agenda kajian.',
-    thumbnailUrl: '/og-image.jpg?v=1787035370',
+    thumbnailUrl: '/og-image.jpg',
     authorName: 'Jaenal Maskun, S.Pd.I.',
     badgeText: 'Website Resmi Madrasah'
   },

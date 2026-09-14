@@ -5,6 +5,7 @@ import { generateDatabaseSql } from './sqlGenerator';
 import {
   generateDbConfigFile,
   generateIndexPhpFallback,
+  generateOgImagePhp,
   generateApiSiteDataPhp,
   generateApiSiteContentPhp,
   generateApiLogoConfigPhp,
@@ -20,6 +21,14 @@ import {
   generateApiMessagesPhp,
   generateApiSettingsPhp,
   generateApiTestDbPhp,
+  generateApiBackupZipPhp,
+  generateApiBackupRestorePhp,
+  generateApiBackupRestoreZipPhp,
+  generateApiBackupSnapshotsPhp,
+  generateApiBackupCreateSnapshotPhp,
+  generateApiBackupRestoreSnapshotPhp,
+  generateApiBackupDeleteSnapshotPhp,
+  generateApiBackupExportCsvPhp,
   triggerZipDownload
 } from './pleskExporter';
 
@@ -27,10 +36,10 @@ export { triggerZipDownload };
 
 export const CPANEL_DB_CONFIG = {
   host: 'localhost',
-  user: 'jaenal_masterweb',
-  dbName: 'jaenal_masterweb',
-  username: 'jaenal_masterweb',
-  database: 'jaenal_masterweb',
+  user: 'denbagus_webpersonal',
+  dbName: 'denbagues_webpersonal',
+  username: 'denbagus_webpersonal',
+  database: 'denbagues_webpersonal',
   password: 'masbagus15',
   port: 3306,
   charset: 'utf8mb4'
@@ -41,6 +50,9 @@ export const generateCpanelHtaccess = (): string => {
 # .HTACCESS OPTIMIZED FOR CPANEL HOSTING (public_html)
 # Website Personal Ust. Jaenal Maskun, S.Pd.I.
 # =============================================================
+
+# 0. Entry Point Configuration
+DirectoryIndex index.php index.html
 
 # 1. UTF-8 Charset
 AddDefaultCharset UTF-8
@@ -66,7 +78,19 @@ ServerSignature Off
     AddOutputFilterByType DEFLATE text/plain text/html text/xml text/css application/xml application/xhtml+xml application/rss+xml application/javascript application/x-javascript application/json image/svg+xml
 </IfModule>
 
-# 5. Browser Caching
+# 5. Anti-Cache for Social Media OpenGraph Thumbnails
+<FilesMatch "^(og-image|thumbnail|og-preview)\\.(jpg|jpeg|png)$">
+    <IfModule mod_expires.c>
+        ExpiresActive Off
+    </IfModule>
+    <IfModule mod_headers.c>
+        Header set Cache-Control "no-cache, no-store, must-revalidate, max-age=0"
+        Header set Pragma "no-cache"
+        Header set Expires 0
+    </IfModule>
+</FilesMatch>
+
+# 6. Browser Caching for Static Assets
 <IfModule mod_expires.c>
     ExpiresActive On
     ExpiresByType image/jpg "access plus 1 month"
@@ -84,7 +108,7 @@ ServerSignature Off
     ExpiresByType audio/mpeg "access plus 1 month"
 </IfModule>
 
-# 6. Security Headers
+# 7. Security Headers
 <IfModule mod_headers.c>
     Header set X-Content-Type-Options "nosniff"
     Header set X-XSS-Protection "1; mode=block"
@@ -92,7 +116,7 @@ ServerSignature Off
     Header set Referrer-Policy "strict-origin-when-cross-origin"
 </IfModule>
 
-# 7. Media MIME Types
+# 8. Media MIME Types
 <IfModule mod_mime.c>
     AddType video/mp4 .mp4 .m4v
     AddType video/webm .webm
@@ -105,7 +129,7 @@ ServerSignature Off
     AddType audio/mp4 .m4a .aac
 </IfModule>
 
-# 8. URL Rewriting for Single Page Application & API Routing
+# 9. URL Rewriting for Single Page Application & API Routing
 <IfModule mod_rewrite.c>
     RewriteEngine On
     RewriteBase /
@@ -114,6 +138,13 @@ ServerSignature Off
     RewriteCond %{HTTPS} off
     RewriteCond %{HTTP:X-Forwarded-Proto} !https
     RewriteRule ^(.*)$ https://%{HTTP_HOST}%{REQUEST_URI} [L,R=301]
+
+    # Dynamic Social Media & OpenGraph Thumbnail (Anti-Cache)
+    RewriteRule ^(og-image|thumbnail|og-preview)\\.(jpg|jpeg|png)$ og-image.php [QSA,L]
+
+    # Ensure root and index.html are processed by index.php for dynamic OpenGraph injection
+    RewriteRule ^$ index.php [QSA,L]
+    RewriteRule ^index\\.html$ index.php [QSA,L]
 
     # API Routing
     RewriteRule ^api/site-data/?$ api/site-data.php [QSA,L]
@@ -263,6 +294,7 @@ export const downloadCpanelPackageZip = async (
   zip.file('database.sql', generateDatabaseSql(content, logoConfig, footerConfig));
   zip.file('db_config.php', generateDbConfigFile());
   zip.file('index.php', generateIndexPhpFallback());
+  zip.file('og-image.php', generateOgImagePhp());
   zip.file('.htaccess', generateCpanelHtaccess());
   zip.file('README_CPANEL.md', generateCpanelReadme());
   zip.file('PANDUAN_HOSTING_CPANEL.txt', generateCpanelReadme());
@@ -286,6 +318,15 @@ export const downloadCpanelPackageZip = async (
     apiFolder.file('messages.php', generateApiMessagesPhp());
     apiFolder.file('settings.php', generateApiSettingsPhp());
     apiFolder.file('test_db.php', generateApiTestDbPhp());
+    apiFolder.file('backup-zip.php', generateApiBackupZipPhp());
+    apiFolder.file('backup-zip-data.php', generateApiBackupZipPhp());
+    apiFolder.file('backup-restore.php', generateApiBackupRestorePhp());
+    apiFolder.file('backup-restore-zip.php', generateApiBackupRestoreZipPhp());
+    apiFolder.file('backup-snapshots.php', generateApiBackupSnapshotsPhp());
+    apiFolder.file('backup-create-snapshot.php', generateApiBackupCreateSnapshotPhp());
+    apiFolder.file('backup-restore-snapshot.php', generateApiBackupRestoreSnapshotPhp());
+    apiFolder.file('backup-delete-snapshot.php', generateApiBackupDeleteSnapshotPhp());
+    apiFolder.file('backup-export-csv.php', generateApiBackupExportCsvPhp());
     apiFolder.file('db_config.php', generateDbConfigFile());
   }
 

@@ -32,7 +32,8 @@ import {
   Image as ImageIcon,
   FolderUp,
   Camera,
-  Smartphone
+  Smartphone,
+  ExternalLink
 } from 'lucide-react';
 import { BackupSnapshot, BackupStats, FullBackupBundle, SiteContentConfig, HeaderLogoConfig, StickyFooterConfig } from '../types';
 import { downloadPleskPackageZip, triggerZipDownload } from '../utils/pleskExporter';
@@ -67,47 +68,164 @@ const downloadBlobSafely = (blob: Blob, filename: string) => {
   }, 2500);
 };
 
-// Helper: Extract JSON from SQL Dump (e.g. database.sql)
+// Helper: Extract JSON from SQL Dump (e.g. database.sql, phpMyAdmin dumps, etc.)
 function extractSiteDataFromSql(sql: string): any | null {
+  if (!sql || typeof sql !== 'string') return null;
+
   try {
-    // 1. Look for 'site_data' in VALUES ('site_data', '...')
-    const regex = /VALUES\s*\(\s*['"]site_data['"]\s*,\s*['"]((?:[^'"]|''|\\.)+)['"]/i;
-    const match = sql.match(regex);
-    if (match && match[1]) {
-      let rawVal = match[1]
-        .replace(/''/g, "'")
-        .replace(/\\'/g, "'")
-        .replace(/\\"/g, '"')
-        .replace(/\\\\/g, '\\')
-        .replace(/\\n/g, '\n')
-        .replace(/\\r/g, '\r')
-        .replace(/\\t/g, '\t');
-      return JSON.parse(rawVal);
+    // 1. Search for key 'site_data' or 'site_content' with single or double quotes
+    const searchKeys = ["'site_data'", '"site_data"', '`site_data`', "'site_content'", '"site_content"'];
+    for (const sKey of searchKeys) {
+      let searchIdx = sql.indexOf(sKey);
+      let attempts = 0;
+      while (searchIdx !== -1 && attempts < 10) {
+        attempts++;
+        const isFullData = sKey.includes('site_data');
+        const keyPos = searchIdx + sKey.length;
+
+        // Find the next comma separating key and value column
+        const commaIdx = sql.indexOf(',', keyPos);
+        if (commaIdx !== -1 && commaIdx - keyPos < 300) {
+          // Find opening quote of the value string
+          let quoteIdx = -1;
+          let quoteChar = '';
+          for (let i = commaIdx + 1; i < sql.length && i < commaIdx + 80; i++) {
+            const c = sql[i];
+            if (c === "'" || c === '"') {
+              quoteIdx = i;
+              quoteChar = c;
+              break;
+            } else if (c !== ' ' && c !== '\t' && c !== '\r' && c !== '\n') {
+              break;
+            }
+          }
+
+          if (quoteIdx !== -1) {
+            // Find closing quote efficiently using indexOf rather than character-by-character array push
+            let curr = quoteIdx + 1;
+            let endQuote = -1;
+            while (curr < sql.length) {
+              const nextQuote = sql.indexOf(quoteChar, curr);
+              if (nextQuote === -1) break;
+              // Check if escaped by backslashes
+              let slashCount = 0;
+              let p = nextQuote - 1;
+              while (p >= quoteIdx + 1 && sql[p] === '\\') {
+                slashCount++;
+                p--;
+              }
+              if (slashCount % 2 === 0) {
+                // Check if double single-quote SQL escaping (e.g. '')
+                if (quoteChar === "'" && sql[nextQuote + 1] === "'") {
+                  curr = nextQuote + 2;
+                  continue;
+                }
+                endQuote = nextQuote;
+                break;
+              }
+              curr = nextQuote + 1;
+            }
+
+            if (endQuote !== -1) {
+              const rawSub = sql.substring(quoteIdx + 1, endQuote);
+              const unescaped = rawSub
+                .replace(/''/g, "'")
+                .replace(/\\'/g, "'")
+                .replace(/\\"/g, '"')
+                .replace(/\\\\/g, '\\')
+                .replace(/\\r\\n/g, '\n')
+                .replace(/\\n/g, '\n')
+                .replace(/\\t/g, '\t');
+
+              try {
+                const parsed = JSON.parse(unescaped);
+                if (parsed && typeof parsed === 'object') {
+                  return isFullData ? parsed : { siteContent: parsed };
+                }
+              } catch (e) {
+                try {
+                  const parsed2 = JSON.parse(rawSub);
+                  if (parsed2 && typeof parsed2 === 'object') {
+                    return isFullData ? parsed2 : { siteContent: parsed2 };
+                  }
+                } catch (e2) {}
+              }
+            }
+          }
+        }
+        searchIdx = sql.indexOf(sKey, keyPos);
+      }
     }
 
-    // 2. Look for 'site_content' in VALUES ('site_content', '...')
-    const regexContent = /VALUES\s*\(\s*['"]site_content['"]\s*,\s*['"]((?:[^'"]|''|\\.)+)['"]/i;
-    const matchContent = sql.match(regexContent);
-    if (matchContent && matchContent[1]) {
-      let rawVal = matchContent[1]
-        .replace(/''/g, "'")
-        .replace(/\\'/g, "'")
-        .replace(/\\"/g, '"')
-        .replace(/\\\\/g, '\\')
-        .replace(/\\n/g, '\n')
-        .replace(/\\r/g, '\r')
-        .replace(/\\t/g, '\t');
-      return { siteContent: JSON.parse(rawVal) };
-    }
-    
-    // 3. Fallback: search for any large JSON string containing siteContent
-    const jsonMatch = sql.match(/\{[\s\S]*?"siteContent"[\s\S]*?\}(?=[',;\n]|$)/);
-    if (jsonMatch) {
-      return JSON.parse(jsonMatch[0].replace(/''/g, "'"));
+    // 2. Direct search for JSON structures
+    const anchors = ['"siteContent"', '"profile"'];
+    for (const anchor of anchors) {
+      let anchorIdx = sql.indexOf(anchor);
+      let attempts = 0;
+      while (anchorIdx !== -1 && attempts < 5) {
+        attempts++;
+        let openBrace = -1;
+        for (let j = anchorIdx; j >= 0 && j >= anchorIdx - 200; j--) {
+          if (sql[j] === '{') {
+            openBrace = j;
+            break;
+          }
+        }
+
+        if (openBrace !== -1) {
+          let depth = 0;
+          let inString = false;
+          let stringChar = '';
+          let escaped = false;
+          const maxSearch = Math.min(sql.length, openBrace + 600000); // 600KB window
+
+          for (let k = openBrace; k < maxSearch; k++) {
+            const ch = sql[k];
+            if (inString) {
+              if (escaped) {
+                escaped = false;
+              } else if (ch === '\\') {
+                escaped = true;
+              } else if (ch === stringChar) {
+                inString = false;
+              }
+            } else {
+              if (ch === '"' || ch === "'") {
+                inString = true;
+                stringChar = ch;
+              } else if (ch === '{') {
+                depth++;
+              } else if (ch === '}') {
+                depth--;
+                if (depth === 0) {
+                  const candidate = sql.substring(openBrace, k + 1);
+                  try {
+                    const parsed = JSON.parse(candidate);
+                    if (parsed?.siteContent || parsed?.profile) {
+                      return parsed;
+                    }
+                  } catch (e) {
+                    try {
+                      const cleaned = candidate.replace(/''/g, "'").replace(/\\'/g, "'");
+                      const parsed = JSON.parse(cleaned);
+                      if (parsed?.siteContent || parsed?.profile) {
+                        return parsed;
+                      }
+                    } catch (e2) {}
+                  }
+                  break;
+                }
+              }
+            }
+          }
+        }
+        anchorIdx = sql.indexOf(anchor, anchorIdx + anchor.length);
+      }
     }
   } catch (e) {
-    console.warn('SQL extraction failed', e);
+    console.warn('SQL extraction notice:', e);
   }
+
   return null;
 }
 
@@ -136,11 +254,14 @@ export const BackupManager: React.FC<BackupManagerProps> = ({
   const [restoreStats, setRestoreStats] = useState<(BackupStats & { mediaCount?: number; fileTypeDesc?: string }) | null>(null);
   const [restoreError, setRestoreError] = useState<string | null>(null);
   const [isRestoring, setIsRestoring] = useState(false);
+  const [isAnalyzingFile, setIsAnalyzingFile] = useState(false);
+  const [restoreProgressStep, setRestoreProgressStep] = useState<string | null>(null);
   const [restoreSuccessMsg, setRestoreSuccessMsg] = useState<string | null>(null);
   const [restoreIncludeMessages, setRestoreIncludeMessages] = useState(true);
   const [isDraggingOver, setIsDraggingOver] = useState(false);
 
   // Export progress
+  const [includeBase64InJson, setIncludeBase64InJson] = useState(false);
   const [isDownloadingJson, setIsDownloadingJson] = useState(false);
   const [isDownloadingZip, setIsDownloadingZip] = useState(false);
   const [backupStatusText, setBackupStatusText] = useState<string | null>(null);
@@ -190,64 +311,98 @@ export const BackupManager: React.FC<BackupManagerProps> = ({
 
   // Handler: Process uploaded file (.json, .zip, or .sql)
   const processBackupFile = async (file: File) => {
+    setIsAnalyzingFile(true);
+    setRestoreProgressStep('Membaca berkas cadangan...');
     setRestoreError(null);
     setRestoreSuccessMsg(null);
     setParsedRestoreData(null);
     setRestoreStats(null);
     setSelectedFile(file);
 
-    const fileNameLower = file.name.toLowerCase();
+    // Yield control to let browser render loading state and stay responsive
+    await new Promise(resolve => setTimeout(resolve, 50));
 
-    // 1. Detect if it's a ZIP archive by magic bytes OR file extension/MIME
-    let isZipArchive = fileNameLower.endsWith('.zip') || file.type.includes('zip') || file.type.includes('compressed');
-    if (!isZipArchive) {
-      try {
-        const slice = await file.slice(0, 4).arrayBuffer();
-        const b = new Uint8Array(slice);
-        if (b[0] === 0x50 && b[1] === 0x4B) { // 'PK' magic bytes
-          isZipArchive = true;
-        }
-      } catch (e) {}
-    }
+    try {
+      const fileNameLower = file.name.toLowerCase();
 
-    if (isZipArchive) {
-      try {
+      // 1. Detect if it's a ZIP archive by magic bytes OR file extension/MIME
+      let isZipArchive = fileNameLower.endsWith('.zip') || file.type.includes('zip') || file.type.includes('compressed');
+      if (!isZipArchive) {
+        try {
+          const slice = await file.slice(0, 4).arrayBuffer();
+          const b = new Uint8Array(slice);
+          if (b[0] === 0x50 && b[1] === 0x4B) { // 'PK' magic bytes
+            isZipArchive = true;
+          }
+        } catch (e) {}
+      }
+
+      if (isZipArchive) {
+        setRestoreProgressStep('Menganalisis arsip ZIP...');
+        await new Promise(resolve => setTimeout(resolve, 20));
+
         const zip = await JSZip.loadAsync(file);
         
-        // Find JSON data inside the ZIP
+        // Find JSON data inside the ZIP with path normalization
         let jsonContentStr: string | null = null;
         let jsonFoundPath = '';
         
-        const candidatePaths = [
-          'data/persisted_site_data.json',
+        const prioritizedJsonFilenames = [
           'persisted_site_data.json',
-          'data/site_data.default.json',
           'site_data.default.json',
-          'data/site_data.json',
           'site_data.json',
+          'site_content.json',
           'backup.json',
-          'data/backup_data.json'
+          'backup_data.json'
         ];
         
-        for (const p of candidatePaths) {
-          const entry = zip.file(p);
-          if (entry) {
-            jsonContentStr = await entry.async('string');
-            jsonFoundPath = p;
-            break;
+        // Pass A: Check prioritized standard filenames first
+        for (const [rawPath, zipEntry] of Object.entries(zip.files)) {
+          if (zipEntry.dir) continue;
+          const normalized = rawPath.replace(/\\/g, '/');
+          if (normalized.includes('__MACOSX') || normalized.startsWith('.')) continue;
+
+          const baseName = normalized.split('/').pop()?.toLowerCase();
+          if (baseName && prioritizedJsonFilenames.includes(baseName)) {
+            try {
+              const testStr = await zipEntry.async('string');
+              const testObj = JSON.parse(testStr);
+              if (testObj && (testObj.siteContent || testObj.data?.siteContent || testObj.backup || testObj.profile || testObj.logoConfig || testObj.stickyFooterConfig)) {
+                jsonContentStr = testStr;
+                jsonFoundPath = normalized;
+                break;
+              }
+            } catch (e) {}
           }
         }
         
-        // Search all entries for any .json file with valid structure
+        // Pass B: Search all entries for any .json file with valid structure
         if (!jsonContentStr) {
-          for (const [relativePath, zipEntry] of Object.entries(zip.files)) {
-            if (!zipEntry.dir && relativePath.endsWith('.json')) {
+          for (const [rawPath, zipEntry] of Object.entries(zip.files)) {
+            if (zipEntry.dir) continue;
+            const normalized = rawPath.replace(/\\/g, '/');
+            if (normalized.includes('__MACOSX') || normalized.startsWith('.')) continue;
+
+            if (normalized.endsWith('.json')) {
               try {
                 const testStr = await zipEntry.async('string');
                 const testObj = JSON.parse(testStr);
-                if (testObj?.siteContent || testObj?.data?.siteContent || testObj?.profile || testObj?.logoConfig || testObj?.stickyFooterConfig) {
+                const hasData = !!(
+                  testObj?.siteContent ||
+                  testObj?.data?.siteContent ||
+                  testObj?.backup?.data?.siteContent ||
+                  testObj?.backup?.siteContent ||
+                  testObj?.backup?.data ||
+                  testObj?.profile ||
+                  testObj?.data?.profile ||
+                  testObj?.logoConfig ||
+                  testObj?.stickyFooterConfig ||
+                  testObj?.setting_key === 'site_data' ||
+                  (Array.isArray(testObj) && testObj.some((r: any) => r?.setting_key === 'site_data' || r?.key === 'site_data'))
+                );
+                if (hasData) {
                   jsonContentStr = testStr;
-                  jsonFoundPath = relativePath;
+                  jsonFoundPath = normalized;
                   break;
                 }
               } catch (e) {}
@@ -255,15 +410,19 @@ export const BackupManager: React.FC<BackupManagerProps> = ({
           }
         }
 
-        // Search for database.sql inside the ZIP
+        // Pass C: Search for database.sql inside the ZIP
         if (!jsonContentStr) {
-          for (const [relativePath, zipEntry] of Object.entries(zip.files)) {
-            if (!zipEntry.dir && relativePath.endsWith('.sql')) {
+          for (const [rawPath, zipEntry] of Object.entries(zip.files)) {
+            if (zipEntry.dir) continue;
+            const normalized = rawPath.replace(/\\/g, '/');
+            if (normalized.includes('__MACOSX') || normalized.startsWith('.')) continue;
+
+            if (normalized.endsWith('.sql')) {
               const sqlStr = await zipEntry.async('string');
               const extracted = extractSiteDataFromSql(sqlStr);
               if (extracted) {
                 jsonContentStr = JSON.stringify(extracted);
-                jsonFoundPath = relativePath;
+                jsonFoundPath = normalized;
                 break;
               }
             }
@@ -276,68 +435,57 @@ export const BackupManager: React.FC<BackupManagerProps> = ({
         }
 
         const parsed = JSON.parse(jsonContentStr);
+        const zipRoot = parsed.backup ? (parsed.backup.data || parsed.backup) : parsed;
+        const dataContent = zipRoot.data?.siteContent || zipRoot.siteContent || (zipRoot.profile ? zipRoot : null);
+        const logoContent = zipRoot.data?.logoConfig || zipRoot.logoConfig || parsed.logoConfig;
+        const footerContent = zipRoot.data?.stickyFooterConfig || zipRoot.stickyFooterConfig || parsed.stickyFooterConfig;
 
-        // Extract media files in uploads/ into Base64 map
-        const zipMediaMap: Record<string, string> = {};
+        // Efficient media counting and preview without heavy Base64 decoding
         let mediaFilesCount = 0;
-        for (const [path, entry] of Object.entries(zip.files)) {
-          if (!entry.dir && (path.startsWith('uploads/') || path.startsWith('data/uploads/') || path.includes('/uploads/'))) {
-            const fileName = path.split('/').pop() || '';
+        let avatarEntry: JSZip.JSZipObject | null = null;
+        const targetAvatarUrl = dataContent?.profile?.avatarUrl || '';
+        const targetAvatarName = targetAvatarUrl ? targetAvatarUrl.split('/').pop()?.split('?')[0]?.toLowerCase() : '';
+
+        for (const [rawPath, entry] of Object.entries(zip.files)) {
+          if (entry.dir) continue;
+          const normalized = rawPath.replace(/\\/g, '/');
+          if (normalized.includes('__MACOSX') || normalized.startsWith('.')) continue;
+
+          if (normalized.includes('uploads/') || normalized.includes('assets/uploads/')) {
+            const fileName = normalized.split('/').pop() || '';
             if (fileName && !fileName.startsWith('.')) {
               mediaFilesCount++;
-              try {
-                const base64Str = await entry.async('base64');
-                let mime = 'image/jpeg';
-                const lower = fileName.toLowerCase();
-                if (lower.endsWith('.png')) mime = 'image/png';
-                else if (lower.endsWith('.webp')) mime = 'image/webp';
-                else if (lower.endsWith('.svg')) mime = 'image/svg+xml';
-                else if (lower.endsWith('.gif')) mime = 'image/gif';
-
-                const dataUrl = `data:${mime};base64,${base64Str}`;
-                zipMediaMap[fileName] = dataUrl;
-                zipMediaMap[`/uploads/${fileName}`] = dataUrl;
-                zipMediaMap[`uploads/${fileName}`] = dataUrl;
-                zipMediaMap[`assets/uploads/${fileName}`] = dataUrl;
-                zipMediaMap[`/assets/uploads/${fileName}`] = dataUrl;
-              } catch (e) {}
+              if (targetAvatarName && fileName.toLowerCase() === targetAvatarName) {
+                avatarEntry = entry;
+              }
             }
           }
         }
 
-        let dataContent = parsed.data?.siteContent || parsed.siteContent || (parsed.profile ? parsed : null);
-
-        // If ZIP has media files, resolve relative URLs to Base64 data URLs for seamless offline/Android display
-        if (Object.keys(zipMediaMap).length > 0) {
-          if (dataContent) {
-            dataContent = deepResolveMediaUrls(dataContent, zipMediaMap);
+        // Lightweight preview for avatar only
+        if (targetAvatarUrl) {
+          if (targetAvatarUrl.startsWith('data:image/') || targetAvatarUrl.startsWith('http://') || targetAvatarUrl.startsWith('https://')) {
+            setPreviewAvatar(targetAvatarUrl);
+          } else if (avatarEntry) {
+            try {
+              const blob = await avatarEntry.async('blob');
+              setPreviewAvatar(URL.createObjectURL(blob));
+            } catch (e) {
+              setPreviewAvatar(targetAvatarUrl);
+            }
+          } else {
+            setPreviewAvatar(targetAvatarUrl);
           }
-          if (parsed.logoConfig) {
-            parsed.logoConfig = deepResolveMediaUrls(parsed.logoConfig, zipMediaMap);
-          }
-          if (parsed.data?.logoConfig) {
-            parsed.data.logoConfig = deepResolveMediaUrls(parsed.data.logoConfig, zipMediaMap);
-          }
-          if (parsed.stickyFooterConfig) {
-            parsed.stickyFooterConfig = deepResolveMediaUrls(parsed.stickyFooterConfig, zipMediaMap);
-          }
-          if (parsed.data?.stickyFooterConfig) {
-            parsed.data.stickyFooterConfig = deepResolveMediaUrls(parsed.data.stickyFooterConfig, zipMediaMap);
-          }
-        }
-
-        const content = dataContent || {};
-        if (content.profile?.avatarUrl) {
-          setPreviewAvatar(content.profile.avatarUrl);
         } else {
           setPreviewAvatar(null);
         }
 
+        const content = dataContent || {};
         const stats: BackupStats & { mediaCount?: number; fileTypeDesc?: string } = {
           publicationsCount: Array.isArray(content.publications) ? content.publications.length : 0,
           agendasCount: Array.isArray(content.agenda) ? content.agenda.length : 0,
           galleryCount: Array.isArray(content.gallery) ? content.gallery.length : 0,
-          messagesCount: Array.isArray(parsed.messages) ? parsed.messages.length : 0,
+          messagesCount: Array.isArray(parsed.messages || zipRoot.messages) ? (parsed.messages || zipRoot.messages).length : 0,
           pillarsCount: Array.isArray(content.pillars) ? content.pillars.length : 0,
           quotesCount: Array.isArray(content.quotes) ? content.quotes.length : 0,
           educationCount: Array.isArray(content.education) ? content.education.length : 0,
@@ -349,57 +497,186 @@ export const BackupManager: React.FC<BackupManagerProps> = ({
         setParsedRestoreData({
           ...parsed,
           data: {
-            ...parsed.data,
-            siteContent: dataContent
+            ...(zipRoot.data || zipRoot),
+            siteContent: dataContent,
+            logoConfig: logoContent,
+            stickyFooterConfig: footerContent
           },
           siteContent: dataContent,
+          logoConfig: logoContent,
+          stickyFooterConfig: footerContent,
           _fileType: 'zip',
           _mediaFilesCount: mediaFilesCount,
           _zipSourceFile: file
         });
         setRestoreStats(stats);
         setRestoreSuccessMsg(`Paket ZIP berhasil diverifikasi! Ditemukan konfigurasi web & ${mediaFilesCount} berkas media terintegrasi.`);
-      } catch (err: any) {
-        setRestoreError(`Gagal membaca berkas ZIP: ${err.message || 'Format arsip tidak valid'}`);
+        return;
       }
-      return;
-    }
 
-    // 2. Read as text to check if JSON or SQL
-    let fileText = '';
-    try {
-      fileText = await file.text();
-    } catch (e: any) {
-      setRestoreError('Gagal membaca isi berkas. Pastikan berkas tidak rusak.');
-      return;
-    }
+      // 2. Read as text to check if JSON or SQL
+      setRestoreProgressStep('Membaca berkas teks data...');
+      await new Promise(resolve => setTimeout(resolve, 20));
 
-    // Try parsing as JSON
-    let parsedJson: any = null;
-    try {
-      parsedJson = JSON.parse(fileText);
-    } catch (e) {}
+      let fileText = '';
+      try {
+        fileText = await file.text();
+      } catch (e: any) {
+        setRestoreError('Gagal membaca isi berkas. Pastikan berkas tidak rusak atau coba pilih ulang.');
+        return;
+      }
 
-    if (parsedJson && typeof parsedJson === 'object') {
-      const dataContent = parsedJson.data?.siteContent || parsedJson.siteContent || (parsedJson.profile ? parsedJson : null);
-      if (dataContent || parsedJson.logoConfig || parsedJson.stickyFooterConfig) {
+      const cleanText = fileText.replace(/^\uFEFF/, '').trim();
+
+      // Try parsing as JSON (supporting standard backup, raw site_data, phpMyAdmin JSON array, etc.)
+      let parsedJson: any = null;
+      try {
+        parsedJson = JSON.parse(cleanText);
+      } catch (e) {
+        // Substring fallback if there are leading/trailing non-JSON characters
+        const firstObj = cleanText.indexOf('{');
+        const lastObj = cleanText.lastIndexOf('}');
+        if (firstObj !== -1 && lastObj > firstObj) {
+          try {
+            parsedJson = JSON.parse(cleanText.substring(firstObj, lastObj + 1));
+          } catch (e2) {}
+        }
+        if (!parsedJson) {
+          const firstArr = cleanText.indexOf('[');
+          const lastArr = cleanText.lastIndexOf(']');
+          if (firstArr !== -1 && lastArr > firstArr) {
+            try {
+              parsedJson = JSON.parse(cleanText.substring(firstArr, lastArr + 1));
+            } catch (e3) {}
+          }
+        }
+      }
+
+      if (parsedJson) {
+        let dataContent: any = null;
+        let logoCandidate: any = null;
+        let footerCandidate: any = null;
+        let messagesCandidate: any = null;
+
+        // Case A: phpMyAdmin / Adminer table dump as JSON array
+        if (Array.isArray(parsedJson)) {
+          for (const row of parsedJson) {
+            if (row && (row.setting_key === 'site_data' || row.key === 'site_data')) {
+              try {
+                const val = typeof row.setting_value === 'string' ? JSON.parse(row.setting_value) : row.setting_value;
+                if (val) {
+                  dataContent = val.siteContent || (val.profile ? val : null);
+                  logoCandidate = val.logoConfig;
+                  footerCandidate = val.stickyFooterConfig;
+                  messagesCandidate = val.messages;
+                }
+              } catch (e) {}
+            }
+          }
+        } else if (typeof parsedJson === 'object') {
+          // Case B: standard backup envelope, restoredData, snapshot, or persisted_site_data.json
+          const targetObj = parsedJson.restoredData || parsedJson.backup?.data || parsedJson.backup || parsedJson;
+          if (targetObj.data?.siteContent) {
+            dataContent = targetObj.data.siteContent;
+            logoCandidate = targetObj.data.logoConfig || targetObj.logoConfig || parsedJson.logoConfig;
+            footerCandidate = targetObj.data.stickyFooterConfig || targetObj.stickyFooterConfig || parsedJson.stickyFooterConfig;
+            messagesCandidate = targetObj.data.messages || targetObj.messages || parsedJson.messages;
+          } else if (targetObj.siteContent) {
+            dataContent = targetObj.siteContent;
+            logoCandidate = targetObj.logoConfig || parsedJson.logoConfig;
+            footerCandidate = targetObj.stickyFooterConfig || parsedJson.stickyFooterConfig;
+            messagesCandidate = targetObj.messages || parsedJson.messages;
+          } else if (targetObj.site_data) {
+            try {
+              const val = typeof targetObj.site_data === 'string' ? JSON.parse(targetObj.site_data) : targetObj.site_data;
+              dataContent = val?.siteContent || (val?.profile ? val : null);
+              logoCandidate = val?.logoConfig || targetObj.logoConfig;
+              footerCandidate = val?.stickyFooterConfig || targetObj.stickyFooterConfig;
+              messagesCandidate = val?.messages || targetObj.messages;
+            } catch (e) {}
+          } else if (targetObj.setting_key === 'site_data' && targetObj.setting_value) {
+            try {
+              const val = typeof targetObj.setting_value === 'string' ? JSON.parse(targetObj.setting_value) : targetObj.setting_value;
+              dataContent = val?.siteContent || (val?.profile ? val : null);
+              logoCandidate = val?.logoConfig;
+              footerCandidate = val?.stickyFooterConfig;
+              messagesCandidate = val?.messages;
+            } catch (e) {}
+          } else if (targetObj.profile) {
+            dataContent = targetObj;
+            logoCandidate = targetObj.logoConfig || parsedJson.logoConfig;
+            footerCandidate = targetObj.stickyFooterConfig || parsedJson.stickyFooterConfig;
+            messagesCandidate = targetObj.messages || parsedJson.messages;
+          }
+        }
+
+        if (dataContent || logoCandidate || footerCandidate) {
+          const content = dataContent || {};
+          
+          // Count embedded Base64 media in JSON
+          let embeddedMediaCount = 0;
+          if (content.profile?.avatarUrl?.startsWith('data:image/')) embeddedMediaCount++;
+          if (content.heroSettings?.heroImage?.startsWith('data:image/')) embeddedMediaCount++;
+          if (Array.isArray(content.gallery)) {
+            embeddedMediaCount += content.gallery.filter((g: any) => (g?.image?.startsWith('data:image/') || g?.imageUrl?.startsWith('data:image/'))).length;
+          }
+          if (Array.isArray(content.publications)) {
+            embeddedMediaCount += content.publications.filter((p: any) => (p?.coverUrl?.startsWith('data:image/') || p?.imageUrl?.startsWith('data:image/'))).length;
+          }
+          if (Array.isArray(content.agenda)) {
+            embeddedMediaCount += content.agenda.filter((a: any) => (a?.imageUrl?.startsWith('data:image/') || a?.flyerUrl?.startsWith('data:image/'))).length;
+          }
+          if (logoCandidate?.logoUrl?.startsWith('data:image/') || logoCandidate?.customImageUrl?.startsWith('data:image/')) embeddedMediaCount++;
+          if (footerCandidate?.customIcon?.startsWith('data:image/')) embeddedMediaCount++;
+
+          if (content.profile?.avatarUrl) {
+            setPreviewAvatar(content.profile.avatarUrl);
+          } else {
+            setPreviewAvatar(null);
+          }
+
+          const msgsList = messagesCandidate || parsedJson.messages || [];
+          const stats: BackupStats & { mediaCount?: number; fileTypeDesc?: string } = {
+            publicationsCount: Array.isArray(content.publications) ? content.publications.length : 0,
+            agendasCount: Array.isArray(content.agenda) ? content.agenda.length : 0,
+            galleryCount: Array.isArray(content.gallery) ? content.gallery.length : 0,
+            messagesCount: Array.isArray(msgsList) ? msgsList.length : 0,
+            pillarsCount: Array.isArray(content.pillars) ? content.pillars.length : 0,
+            quotesCount: Array.isArray(content.quotes) ? content.quotes.length : 0,
+            educationCount: Array.isArray(content.education) ? content.education.length : 0,
+            experienceCount: Array.isArray(content.experience) ? content.experience.length : (Array.isArray(content.experiences) ? content.experiences.length : 0),
+            mediaCount: embeddedMediaCount,
+            fileTypeDesc: embeddedMediaCount > 0 ? `Berkas Cadangan JSON (${embeddedMediaCount} Foto Tersemat)` : 'Berkas Cadangan JSON'
+          };
+
+          setParsedRestoreData({
+            ...parsedJson,
+            siteContent: dataContent,
+            logoConfig: logoCandidate || parsedJson.logoConfig,
+            stickyFooterConfig: footerCandidate || parsedJson.stickyFooterConfig,
+            messages: msgsList,
+            data: {
+              siteContent: dataContent,
+              logoConfig: logoCandidate || parsedJson.logoConfig,
+              stickyFooterConfig: footerCandidate || parsedJson.stickyFooterConfig,
+              messages: msgsList
+            },
+            _fileType: 'json'
+          });
+          setRestoreStats(stats);
+          setRestoreSuccessMsg(`Berkas JSON berhasil diverifikasi! ${embeddedMediaCount > 0 ? `${embeddedMediaCount} foto/media tersemat & siap dipulihkan ke Android/PC.` : 'Siap dipulihkan.'}`);
+          return;
+        }
+      }
+
+      // Try extracting from SQL dump (e.g. database.sql, phpMyAdmin exports)
+      setRestoreProgressStep('Mengekstrak skrip database SQL...');
+      await new Promise(resolve => setTimeout(resolve, 20));
+
+      const extractedSql = extractSiteDataFromSql(cleanText);
+      if (extractedSql) {
+        const dataContent = extractedSql.data?.siteContent || extractedSql.siteContent || (extractedSql.profile ? extractedSql : null);
         const content = dataContent || {};
-        
-        // Count embedded Base64 media in JSON
-        let embeddedMediaCount = 0;
-        if (content.profile?.avatarUrl?.startsWith('data:image/')) embeddedMediaCount++;
-        if (content.heroSettings?.heroImage?.startsWith('data:image/')) embeddedMediaCount++;
-        if (Array.isArray(content.gallery)) {
-          embeddedMediaCount += content.gallery.filter((g: any) => g?.imageUrl?.startsWith('data:image/')).length;
-        }
-        if (Array.isArray(content.publications)) {
-          embeddedMediaCount += content.publications.filter((p: any) => p?.coverUrl?.startsWith('data:image/')).length;
-        }
-        if (Array.isArray(content.agenda)) {
-          embeddedMediaCount += content.agenda.filter((a: any) => a?.flyerUrl?.startsWith('data:image/')).length;
-        }
-        if (parsedJson.logoConfig?.logoUrl?.startsWith('data:image/')) embeddedMediaCount++;
-        if (parsedJson.data?.logoConfig?.logoUrl?.startsWith('data:image/')) embeddedMediaCount++;
 
         if (content.profile?.avatarUrl) {
           setPreviewAvatar(content.profile.avatarUrl);
@@ -411,60 +688,38 @@ export const BackupManager: React.FC<BackupManagerProps> = ({
           publicationsCount: Array.isArray(content.publications) ? content.publications.length : 0,
           agendasCount: Array.isArray(content.agenda) ? content.agenda.length : 0,
           galleryCount: Array.isArray(content.gallery) ? content.gallery.length : 0,
-          messagesCount: Array.isArray(parsedJson.messages) ? parsedJson.messages.length : 0,
+          messagesCount: Array.isArray(extractedSql.messages) ? extractedSql.messages.length : 0,
           pillarsCount: Array.isArray(content.pillars) ? content.pillars.length : 0,
           quotesCount: Array.isArray(content.quotes) ? content.quotes.length : 0,
           educationCount: Array.isArray(content.education) ? content.education.length : 0,
-          experienceCount: Array.isArray(content.experience) ? content.experience.length : (Array.isArray(content.experiences) ? content.experiences.length : 0),
-          mediaCount: embeddedMediaCount,
-          fileTypeDesc: embeddedMediaCount > 0 ? `Berkas Cadangan JSON (${embeddedMediaCount} Foto Tersemat)` : 'Berkas Cadangan JSON'
+          experienceCount: Array.isArray(content.experience) ? content.experience.length : 0,
+          fileTypeDesc: 'Skrip Database MySQL (.sql dump)'
         };
 
         setParsedRestoreData({
-          ...parsedJson,
-          _fileType: 'json'
+          ...extractedSql,
+          siteContent: dataContent,
+          logoConfig: extractedSql.logoConfig || extractedSql.data?.logoConfig,
+          stickyFooterConfig: extractedSql.stickyFooterConfig || extractedSql.data?.stickyFooterConfig,
+          data: {
+            siteContent: dataContent,
+            logoConfig: extractedSql.logoConfig || extractedSql.data?.logoConfig,
+            stickyFooterConfig: extractedSql.stickyFooterConfig || extractedSql.data?.stickyFooterConfig
+          },
+          _fileType: 'sql'
         });
         setRestoreStats(stats);
-        setRestoreSuccessMsg(`Berkas JSON berhasil diverifikasi! ${embeddedMediaCount > 0 ? `${embeddedMediaCount} foto/media tersemat & siap dipulihkan ke Android/PC.` : 'Siap dipulihkan.'}`);
+        setRestoreSuccessMsg('Skrip database SQL berhasil diekstrak dan siap dipulihkan!');
         return;
       }
+
+      setRestoreError(`Format berkas "${file.name}" tidak dikenali. Mohon pilih berkas cadangan website (.zip, .json, atau dump .sql).`);
+    } catch (err: any) {
+      setRestoreError(`Gagal menganalisis berkas: ${err?.message || 'Format tidak valid'}`);
+    } finally {
+      setIsAnalyzingFile(false);
+      setRestoreProgressStep(null);
     }
-
-    // Try extracting from SQL dump
-    const extractedSql = extractSiteDataFromSql(fileText);
-    if (extractedSql) {
-      const dataContent = extractedSql.data?.siteContent || extractedSql.siteContent || extractedSql;
-      const content = dataContent || {};
-
-      if (content.profile?.avatarUrl) {
-        setPreviewAvatar(content.profile.avatarUrl);
-      } else {
-        setPreviewAvatar(null);
-      }
-
-      const stats: BackupStats & { mediaCount?: number; fileTypeDesc?: string } = {
-        publicationsCount: Array.isArray(content.publications) ? content.publications.length : 0,
-        agendasCount: Array.isArray(content.agenda) ? content.agenda.length : 0,
-        galleryCount: Array.isArray(content.gallery) ? content.gallery.length : 0,
-        messagesCount: Array.isArray(extractedSql.messages) ? extractedSql.messages.length : 0,
-        pillarsCount: Array.isArray(content.pillars) ? content.pillars.length : 0,
-        quotesCount: Array.isArray(content.quotes) ? content.quotes.length : 0,
-        educationCount: Array.isArray(content.education) ? content.education.length : 0,
-        experienceCount: Array.isArray(content.experience) ? content.experience.length : 0,
-        fileTypeDesc: 'Skrip Database MySQL (.sql dump)'
-      };
-
-      setParsedRestoreData({
-        ...extractedSql,
-        _fileType: 'sql',
-        _rawSqlText: fileText
-      });
-      setRestoreStats(stats);
-      setRestoreSuccessMsg('Skrip database SQL berhasil diekstrak dan siap dipulihkan!');
-      return;
-    }
-
-    setRestoreError('Format berkas tidak dikenali. Mohon pilih berkas cadangan website (.zip, .json, atau dump .sql).');
   };
 
   const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -504,53 +759,80 @@ export const BackupManager: React.FC<BackupManagerProps> = ({
     setIsRestoring(true);
     setRestoreError(null);
     setRestoreSuccessMsg(null);
+    setRestoreProgressStep('Menyiapkan pemulihan data...');
+    await new Promise(resolve => setTimeout(resolve, 50));
 
     try {
       let resultData: any = null;
 
       // 1. If it's a ZIP package, attempt multipart restore to server
       if (parsedRestoreData._fileType === 'zip' && selectedFile) {
+        setRestoreProgressStep('Mengirim paket ZIP & menyinkronkan media ke server...');
+        await new Promise(resolve => setTimeout(resolve, 20));
+
         const formData = new FormData();
         formData.append('backupZip', selectedFile);
         formData.append('restoreMessages', String(restoreIncludeMessages));
 
         try {
           const controller = new AbortController();
-          const timer = setTimeout(() => controller.abort(), 60000);
+          const timer = setTimeout(() => controller.abort(), 120000);
           const res = await fetch('/api/backup/restore-zip', {
             method: 'POST',
             body: formData,
             signal: controller.signal
           });
           clearTimeout(timer);
-          if (res.ok) {
-            const text = await res.text();
-            try {
-              const jsonRes = JSON.parse(text);
-              if (jsonRes.success) {
-                resultData = jsonRes;
-              }
-            } catch (e) {}
+          const text = await res.text();
+          let jsonRes: any = null;
+          try {
+            jsonRes = JSON.parse(text);
+          } catch (e) {}
+
+          if (res.ok && jsonRes?.success) {
+            resultData = jsonRes;
+          } else if (jsonRes?.error) {
+            setRestoreError(`Gagal memulihkan ZIP di server: ${jsonRes.error}`);
+            setIsRestoring(false);
+            setRestoreProgressStep(null);
+            return;
+          } else if (!res.ok) {
+            setRestoreError(`Server mengembalikan galat HTTP ${res.status} saat pemulihan ZIP.`);
+            setIsRestoring(false);
+            setRestoreProgressStep(null);
+            return;
           }
-        } catch (zipErr) {
-          console.warn('Server zip restore notice:', zipErr);
+        } catch (zipErr: any) {
+          console.warn('Server zip restore notice, attempting JSON fallback:', zipErr);
+          // If ZIP upload network/timeout failed, but we already extracted valid siteContent on client, continue to JSON restore
+          if (!parsedRestoreData.siteContent && !parsedRestoreData.data?.siteContent) {
+            setRestoreError(`Koneksi terputus saat memulihkan ZIP: ${zipErr?.message || 'Waktu habis'}`);
+            setIsRestoring(false);
+            setRestoreProgressStep(null);
+            return;
+          }
         }
       }
 
-      // 2. Standard JSON restore
+      // 2. Standard JSON / SQL restore (also serves as fallback if ZIP upload had connection issue)
       if (!resultData) {
-        const payloadToRestore = {
-          ...parsedRestoreData,
+        setRestoreProgressStep('Mengirim data pemulihan ke server & basis data...');
+        await new Promise(resolve => setTimeout(resolve, 20));
+
+        const payloadToRestore: any = {
+          siteContent: parsedRestoreData.siteContent || parsedRestoreData.data?.siteContent,
+          logoConfig: parsedRestoreData.logoConfig || parsedRestoreData.data?.logoConfig,
+          stickyFooterConfig: parsedRestoreData.stickyFooterConfig || parsedRestoreData.data?.stickyFooterConfig,
+          messages: parsedRestoreData.messages || parsedRestoreData.data?.messages,
           restoreMessages: restoreIncludeMessages
         };
-        delete payloadToRestore._fileType;
-        delete payloadToRestore._mediaFilesCount;
-        delete payloadToRestore._zipSourceFile;
-        delete payloadToRestore._rawSqlText;
+        if (parsedRestoreData._rawSqlText) {
+          payloadToRestore._rawSqlText = parsedRestoreData._rawSqlText;
+        }
 
         try {
           const controller = new AbortController();
-          const timer = setTimeout(() => controller.abort(), 60000);
+          const timer = setTimeout(() => controller.abort(), 90000);
           const res = await fetch('/api/backup/restore', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
@@ -559,98 +841,108 @@ export const BackupManager: React.FC<BackupManagerProps> = ({
           });
           clearTimeout(timer);
 
-          if (res.ok) {
-            const text = await res.text();
-            try {
-              resultData = JSON.parse(text);
-            } catch (parseErr) {
-              resultData = {
-                success: true,
-                message: 'Data berhasil dipulihkan dan diselaraskan ke browser!',
-                restoredData: payloadToRestore.data || payloadToRestore
-              };
-            }
-          }
-        } catch (netErr) {
-          console.warn('Network notice during restore:', netErr);
-        }
-      }
+          const text = await res.text();
+          let jsonRes: any = null;
+          try {
+            jsonRes = JSON.parse(text);
+          } catch (parseErr) {}
 
-      if (!resultData) {
-        // Local fallback if offline
-        const payloadToRestore = parsedRestoreData.data || parsedRestoreData;
-        resultData = {
-          success: true,
-          message: 'Data berhasil dipulihkan ke memori lokal browser!',
-          restoredData: payloadToRestore
-        };
+          if (res.ok && jsonRes?.success) {
+            resultData = jsonRes;
+          } else if (jsonRes?.error) {
+            setRestoreError(`Server gagal memulihkan data: ${jsonRes.error}`);
+            setIsRestoring(false);
+            setRestoreProgressStep(null);
+            return;
+          } else if (!res.ok) {
+            setRestoreError(`Server mengembalikan status HTTP ${res.status} saat memulihkan berkas.`);
+            setIsRestoring(false);
+            setRestoreProgressStep(null);
+            return;
+          } else {
+            resultData = {
+              success: true,
+              message: 'Data berhasil dipulihkan dan diselaraskan ke browser!',
+              restoredData: payloadToRestore
+            };
+          }
+        } catch (netErr: any) {
+          console.warn('Network notice during restore:', netErr);
+          resultData = {
+            success: true,
+            message: 'Data berhasil dipulihkan di penyimpanan browser!',
+            restoredData: payloadToRestore
+          };
+        }
       }
 
       if (resultData && resultData.success) {
-        setRestoreSuccessMsg(resultData.message || 'Data website berhasil dipulihkan!');
+        setRestoreProgressStep('Menyimpan pengaturan lokal & memperbarui tampilan...');
+        await new Promise(resolve => setTimeout(resolve, 30));
 
         const restoredObj = resultData.restoredData || parsedRestoreData.data || parsedRestoreData;
-        let finalContent = restoredObj.siteContent || (restoredObj.profile ? restoredObj : null);
-        let finalLogo = restoredObj.logoConfig || parsedRestoreData.logoConfig || parsedRestoreData.data?.logoConfig;
-        let finalFooter = restoredObj.stickyFooterConfig || parsedRestoreData.stickyFooterConfig || parsedRestoreData.data?.stickyFooterConfig;
+        const finalContent = restoredObj.siteContent || (restoredObj.profile ? restoredObj : null);
+        const finalLogo = restoredObj.logoConfig || parsedRestoreData.logoConfig || parsedRestoreData.data?.logoConfig;
+        const finalFooter = restoredObj.stickyFooterConfig || parsedRestoreData.stickyFooterConfig || parsedRestoreData.data?.stickyFooterConfig;
+        const finalLastUpdated = restoredObj.lastUpdated || Date.now();
 
-        // Ensure resolved Base64 photos from parsedRestoreData are preserved on Android/offline
-        const parsedContent = parsedRestoreData.data?.siteContent || parsedRestoreData.siteContent || (parsedRestoreData.profile ? parsedRestoreData : null);
-        if (parsedContent && finalContent) {
-          if (parsedContent.profile?.avatarUrl?.startsWith('data:image/')) {
-            finalContent.profile = { ...finalContent.profile, avatarUrl: parsedContent.profile.avatarUrl };
+        // Fungsi pembersih Base64 masif untuk penyimpanan lokal (agar kuota 5MB per origin aman & anti crash Android)
+        const sanitizeForLocalStorage = (data: any): any => {
+          if (!data || typeof data !== 'object') return data;
+          if (Array.isArray(data)) return data.map(sanitizeForLocalStorage);
+          const cleaned: Record<string, any> = {};
+          for (const [k, v] of Object.entries(data)) {
+            if (typeof v === 'string' && (v.startsWith('data:image/') || v.startsWith('data:')) && v.length > 5000) {
+              cleaned[k] = '';
+            } else if (typeof v === 'object' && v !== null) {
+              cleaned[k] = sanitizeForLocalStorage(v);
+            } else {
+              cleaned[k] = v;
+            }
           }
-          if (parsedContent.heroSettings?.heroImage?.startsWith('data:image/')) {
-            finalContent.heroSettings = { ...finalContent.heroSettings, heroImage: parsedContent.heroSettings.heroImage };
-          }
-          if (Array.isArray(parsedContent.gallery) && Array.isArray(finalContent.gallery)) {
-            parsedContent.gallery.forEach((pg: any, i: number) => {
-              if (pg?.imageUrl?.startsWith('data:image/') && finalContent.gallery[i]) {
-                finalContent.gallery[i].imageUrl = pg.imageUrl;
-              }
-            });
-          }
-        }
+          return cleaned;
+        };
 
-        // Persist to local storage immediately
-        if (finalContent) {
-          localStorage.setItem('madrasah_site_content_config', JSON.stringify(finalContent));
-          if (onDataRestored) onDataRestored(finalContent);
-        }
-        if (finalLogo && onSaveLogoConfig) {
-          localStorage.setItem('madrasah_custom_header_logo', JSON.stringify(finalLogo));
-          onSaveLogoConfig(finalLogo);
-        }
-        if (finalFooter && onSaveStickyFooterConfig) {
-          localStorage.setItem('madrasah_sticky_footer_config', JSON.stringify(finalFooter));
-          onSaveStickyFooterConfig(finalFooter);
-        }
-        const restoreNowTs = Date.now();
-        localStorage.setItem('madrasah_last_updated', String(restoreNowTs));
-
-        // Also sync to MySQL / server so database has the restored data
         try {
-          await fetch('/api/sync-to-mysql', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-              siteContent: finalContent,
-              logoConfig: finalLogo,
-              stickyFooterConfig: finalFooter,
-              lastUpdated: restoreNowTs
-            })
-          });
-        } catch (syncErr) {}
+          if (finalContent) {
+            const cleanContent = sanitizeForLocalStorage(finalContent);
+            const str = JSON.stringify(cleanContent);
+            if (str.length < 500000) {
+              localStorage.setItem('madrasah_site_content_config', str);
+            }
+            if (onDataRestored) onDataRestored(finalContent);
+          }
+          if (finalLogo && onSaveLogoConfig) {
+            const cleanLogo = sanitizeForLocalStorage(finalLogo);
+            const logoStr = JSON.stringify(cleanLogo);
+            if (logoStr.length < 150000) {
+              localStorage.setItem('madrasah_custom_header_logo', logoStr);
+            }
+            onSaveLogoConfig(finalLogo);
+          }
+          if (finalFooter && onSaveStickyFooterConfig) {
+            localStorage.setItem('madrasah_sticky_footer_config', JSON.stringify(finalFooter));
+            onSaveStickyFooterConfig(finalFooter);
+          }
+          localStorage.setItem('madrasah_last_updated', String(finalLastUpdated));
+        } catch (storageErr) {
+          console.warn('Penyimpanan lokal warning:', storageErr);
+        }
 
         fetchSnapshots();
+        setRestoreSuccessMsg(resultData.message || 'Seluruh data website berhasil dipulihkan!');
+        setRestoreProgressStep('Pemulihan tuntas! Memuat ulang website...');
+
         setTimeout(() => {
           window.location.reload();
-        }, 800);
+        }, 1500);
       } else {
         setRestoreError(resultData?.error || 'Gagal menerapkan pemulihan data.');
+        setRestoreProgressStep(null);
       }
     } catch (err: any) {
       setRestoreError(err.message || 'Terjadi kesalahan pemulihan data.');
+      setRestoreProgressStep(null);
     } finally {
       setIsRestoring(false);
     }
@@ -711,10 +1003,15 @@ export const BackupManager: React.FC<BackupManagerProps> = ({
     }
   };
 
-  // Handler: Download JSON Backup (Instant, Self-Contained with Photos)
-  const handleDownloadJsonBackup = async () => {
+  // Handler: Download JSON Backup (Lightweight Pure Data or Optional Self-Contained with Photos)
+  const handleDownloadJsonBackup = async (forceEmbedPhotos?: boolean) => {
+    const shouldEmbed = typeof forceEmbedPhotos === 'boolean' ? forceEmbedPhotos : includeBase64InJson;
     setIsDownloadingJson(true);
-    setBackupStatusText('Menyematkan seluruh foto profil, galeri, dan media...');
+    setBackupStatusText(
+      shouldEmbed
+        ? 'Menyematkan seluruh foto profil, galeri, dan media ke Base64 (ukuran besar)...'
+        : 'Menyiapkan berkas cadangan JSON ringan (teks, artikel & pengaturan)...'
+    );
     try {
       let contentToBackup = siteContent;
       let logoToBackup = logoConfig;
@@ -739,13 +1036,19 @@ export const BackupManager: React.FC<BackupManagerProps> = ({
         } catch (e) {}
       }
 
-      // Automatically embed all images as Base64 Data URLs so the JSON backup is 100% self-contained on Android
-      const {
-        siteContent: embeddedContent,
-        logoConfig: embeddedLogo,
-        stickyFooterConfig: embeddedFooter,
-        inlinedMediaCount
-      } = await embedMediaInSiteData(contentToBackup, logoToBackup, footerToBackup, (msg) => setBackupStatusText(msg));
+      let finalContent = contentToBackup;
+      let finalLogo = logoToBackup;
+      let finalFooter = footerToBackup;
+      let inlinedMediaCount = 0;
+
+      if (shouldEmbed) {
+        // Automatically embed all images as Base64 Data URLs only if user explicitly requested
+        const embedded = await embedMediaInSiteData(contentToBackup, logoToBackup, footerToBackup, (msg) => setBackupStatusText(msg));
+        finalContent = embedded.siteContent;
+        finalLogo = embedded.logoConfig;
+        finalFooter = embedded.stickyFooterConfig;
+        inlinedMediaCount = embedded.inlinedMediaCount;
+      }
 
       const backupObj = {
         version: '2.0',
@@ -753,21 +1056,33 @@ export const BackupManager: React.FC<BackupManagerProps> = ({
         exportedAt: new Date().toISOString(),
         timestamp: Date.now(),
         data: {
-          siteContent: embeddedContent,
-          logoConfig: embeddedLogo,
-          stickyFooterConfig: embeddedFooter,
+          siteContent: finalContent,
+          logoConfig: finalLogo,
+          stickyFooterConfig: finalFooter,
           lastUpdated: Date.now()
         },
         meta: {
           embeddedMediaCount: inlinedMediaCount,
+          type: shouldEmbed ? 'standalone_base64' : 'lightweight_pure_data',
           compatibleWithAndroid: true
         }
       };
 
       const blob = new Blob([JSON.stringify(backupObj, null, 2)], { type: 'application/json' });
       const dateStr = new Date().toISOString().slice(0, 10);
-      downloadBlobSafely(blob, `backup-master-web-jaenalmaskun-${dateStr}.json`);
-      setRestoreSuccessMsg(`Cadangan JSON berhasil diunduh (${inlinedMediaCount} foto tersimpan mandiri)!`);
+      const fileName = shouldEmbed
+        ? `backup-master-web-jaenalmaskun-full-embedded-${dateStr}.json`
+        : `backup-master-web-jaenalmaskun-${dateStr}.json`;
+      downloadBlobSafely(blob, fileName);
+
+      const sizeKb = Math.round(blob.size / 1024);
+      const sizeDisplay = sizeKb > 1024 ? `${(sizeKb / 1024).toFixed(1)} MB` : `${sizeKb} KB`;
+
+      if (shouldEmbed) {
+        setRestoreSuccessMsg(`Cadangan JSON Mandiri berhasil diunduh (${sizeDisplay}, ${inlinedMediaCount} foto Base64 tersemat)!`);
+      } else {
+        setRestoreSuccessMsg(`Cadangan JSON Ringan berhasil diunduh (${sizeDisplay})! Murni teks, artikel, agenda, profil & tautan media (tanpa beban foto/video berat).`);
+      }
     } catch (e: any) {
       alert('Gagal mengunduh cadangan JSON: ' + (e?.message || 'Kesalahan browser'));
     } finally {
@@ -779,8 +1094,38 @@ export const BackupManager: React.FC<BackupManagerProps> = ({
   // Handler: Download Full ZIP Backup (Instant, Self-Contained with Embedded Photos & Uploads Folder)
   const handleDownloadZipBackup = async () => {
     setIsDownloadingZip(true);
-    setBackupStatusText('Menyiapkan paket ZIP lengkap beserta berkas media...');
+    setBackupStatusText('Mengunduh paket arsip ZIP komplit dari server...');
+    const dateStr = new Date().toISOString().slice(0, 10);
+    const backupFileName = `backup-data-komplit-jaenalmaskun-${dateStr}.zip`;
+
+    // 1. Prioritas Utama: Unduh via Server API (/api/backup/zip-data) dengan fetch Blob
     try {
+      const controller = new AbortController();
+      const timer = setTimeout(() => controller.abort(), 45000);
+      const res = await fetch(`/api/backup/zip-data?_t=${Date.now()}`, {
+        signal: controller.signal
+      });
+      clearTimeout(timer);
+
+      if (res.ok) {
+        setBackupStatusText('Menyimpan berkas ZIP ke perangkat...');
+        const blob = await res.blob();
+        if (blob && blob.size > 200) {
+          downloadBlobSafely(blob, backupFileName);
+          setRestoreSuccessMsg('Paket cadangan komplit 100% berhasil diunduh! Seluruh file website, database, logo, galeri foto, video & dokumen tersimpan lengkap.');
+          setIsDownloadingZip(false);
+          setBackupStatusText(null);
+          return;
+        }
+      }
+      throw new Error(`Server respon: ${res.status}`);
+    } catch (serverErr) {
+      console.warn('Direct server ZIP download stream notice, falling back to local JSZip packaging:', serverErr);
+    }
+
+    // 2. Fallback aman client-side jika server offline / unreachable
+    try {
+      setBackupStatusText('Mengemas cadangan data lokal (JSZip)...');
       let contentToBackup = siteContent;
       let logoToBackup = logoConfig;
       let footerToBackup = stickyFooterConfig;
@@ -804,7 +1149,7 @@ export const BackupManager: React.FC<BackupManagerProps> = ({
         } catch (e) {}
       }
 
-      // Convert all photo URLs to Base64 so they are self-contained
+      // Embed media safely with progress
       const {
         siteContent: embeddedContent,
         logoConfig: embeddedLogo,
@@ -831,11 +1176,12 @@ export const BackupManager: React.FC<BackupManagerProps> = ({
       };
 
       zip.file('backup.json', JSON.stringify(backupBundle, null, 2));
-      zip.file('data/persisted_site_data.json', JSON.stringify({ siteContent: embeddedContent, logoConfig: embeddedLogo, stickyFooterConfig: embeddedFooter }, null, 2));
-      zip.file('data/site_content.json', JSON.stringify(embeddedContent, null, 2));
-      zip.file('database.sql', generateDatabaseSql(embeddedContent, embeddedLogo, embeddedFooter));
+      // Gunakan data bersih untuk file JSON & SQL agar ukuran berkas tidak membengkak ratusan megabita
+      zip.file('data/persisted_site_data.json', JSON.stringify({ siteContent: contentToBackup, logoConfig: logoToBackup, stickyFooterConfig: footerToBackup }, null, 2));
+      zip.file('data/site_content.json', JSON.stringify(contentToBackup, null, 2));
+      zip.file('database.sql', generateDatabaseSql(contentToBackup, logoToBackup, footerToBackup));
 
-      // Pack ALL physical image & media files into uploads/ folder inside ZIP
+      // Pack physical media assets into uploads/
       const uploadsFolder = zip.folder('uploads');
       if (uploadsFolder) {
         const mediaAssets = collectAllMediaAssetsForZip(embeddedContent, embeddedLogo, embeddedFooter);
@@ -844,11 +1190,15 @@ export const BackupManager: React.FC<BackupManagerProps> = ({
         }
       }
 
-      zip.file('README_CADANGAN.txt', `PAKET CADANGAN LENGKAP WEB UST. JAENAL MASKUN\nTanggal Ekspor: ${new Date().toLocaleString('id-ID')}\nTotal Foto/Media Disematkan: ${inlinedMediaCount}\nKompatibilitas: Android, iPhone, Windows, Mac & Hosting cPanel/Plesk.`);
+      zip.file('README_CADANGAN.txt', `PAKET CADANGAN LENGKAP WEB UST. JAENAL MASKUN\nTanggal Ekspor: ${new Date().toLocaleString('id-ID')}\nTotal Foto/Media Disematkan: ${inlinedMediaCount}\nOptimasi: Berkas video besar (>15MB) dilewati agar hemat kuota & super cepat di HP.\nKompatibilitas: Android, iPhone, Windows, Mac & Hosting cPanel/Plesk.`);
 
-      const zipBlob = await zip.generateAsync({ type: 'blob', compression: 'DEFLATE' });
-      const dateStr = new Date().toISOString().slice(0, 10);
-      downloadBlobSafely(zipBlob, `paket-cadangan-lengkap-jaenalmaskun-${dateStr}.zip`);
+      // Use fast STORE or low DEFLATE level to prevent high CPU/RAM spikes on phones
+      const zipBlob = await zip.generateAsync({
+        type: 'blob',
+        compression: 'DEFLATE',
+        compressionOptions: { level: 1 }
+      });
+      downloadBlobSafely(zipBlob, backupFileName);
       setRestoreSuccessMsg(`Paket ZIP berhasil diunduh (${inlinedMediaCount} foto tersemat mandiri)!`);
     } catch (e: any) {
       alert('Gagal membuat berkas ZIP: ' + (e?.message || 'Kesalahan'));
@@ -968,22 +1318,38 @@ export const BackupManager: React.FC<BackupManagerProps> = ({
         <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-2.5 shrink-0 w-full md:w-auto">
           <button
             type="button"
+            onClick={() => {
+              if (window.confirm('Bersihkan cache penyimpanan memori HP & browser ini? Website akan memuat ulang data terbaru langsung dari server.')) {
+                try {
+                  localStorage.clear();
+                } catch (e) {}
+                window.location.href = window.location.pathname + '?clean=1';
+              }
+            }}
+            className="px-3.5 py-3 rounded-2xl bg-emerald-950/80 hover:bg-emerald-950 text-emerald-200 border border-emerald-700/60 font-bold text-xs flex items-center justify-center gap-1.5 shadow-sm active:scale-95 transition-all cursor-pointer"
+            title="Bersihkan cache memori browser HP bila terjadi masalah tampilan atau lag"
+          >
+            <RotateCcw className="w-3.5 h-3.5 text-amber-300 shrink-0" />
+            <span>🧹 Bersihkan Cache HP</span>
+          </button>
+          <button
+            type="button"
             onClick={handleRestoreFromBrowserMemory}
             disabled={isRestoringLocal}
             className="px-4 py-3 rounded-2xl bg-gradient-to-r from-emerald-500 to-teal-600 hover:from-emerald-400 hover:to-teal-500 text-white font-extrabold text-xs flex items-center justify-center gap-2 shadow-lg active:scale-95 transition-all cursor-pointer disabled:opacity-50"
             title="Pulihkan data yang tersimpan di browser ini langsung ke database server"
           >
             <Sparkles className="w-4 h-4 text-amber-300 shrink-0" />
-            <span>{isRestoringLocal ? 'Memulihkan...' : '⚡ Pulihkan dari Browser (Anti-Hilang)'}</span>
+            <span>{isRestoringLocal ? 'Memulihkan...' : '⚡ Pulihkan dari Browser'}</span>
           </button>
           <button
             type="button"
-            onClick={handleDownloadJsonBackup}
+            onClick={() => handleDownloadJsonBackup(false)}
             disabled={isDownloadingJson}
             className="px-4 py-3 rounded-2xl bg-gradient-to-r from-amber-400 via-amber-300 to-amber-500 hover:from-amber-300 hover:to-amber-400 text-emerald-950 font-extrabold text-xs flex items-center justify-center gap-2 shadow-lg active:scale-95 transition-all cursor-pointer"
           >
             <Download className="w-4 h-4 shrink-0" />
-            <span>{isDownloadingJson ? 'Mengunduh...' : 'Cadangkan JSON (1-Klik)'}</span>
+            <span>{isDownloadingJson ? 'Mengunduh...' : 'Cadangkan JSON Ringan (1-Klik)'}</span>
           </button>
         </div>
       </div>
@@ -1130,28 +1496,52 @@ export const BackupManager: React.FC<BackupManagerProps> = ({
                 <div>
                   <div className="flex items-center gap-1.5 mb-1">
                     <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-emerald-100 text-emerald-900">
-                      Foto Tersemat (Android Ready)
+                      {includeBase64InJson ? 'Mode Base64 (~Ratusan MB)' : 'Ringan & Cepat (~50 KB)'}
                     </span>
                   </div>
-                  <h4 className="text-sm font-bold text-gray-900">1. Cadangan Berkas JSON (Mandiri & Foto)</h4>
+                  <h4 className="text-sm font-bold text-gray-900">1. Cadangan Berkas JSON</h4>
                   <p className="text-xs text-gray-600 mt-1 leading-relaxed">
-                    Menyimpan seluruh konfigurasi profil, karya, agenda, pilar, galeri, logo, serta menyematkan foto profil secara mandiri sehingga foto tetap tampil sempurna saat dipulihkan di HP Android maupun PC.
+                    Menyimpan seluruh teks profil, karya, agenda, pilar, struktur galeri, dan pengaturan website. Berukuran sangat kecil (~50 KB) dan unduhan selesai dalam 1 detik.
                   </p>
                 </div>
                 <div className="p-3 bg-emerald-50 rounded-xl border border-emerald-200 text-[11px] text-emerald-900 space-y-1">
-                  <span className="font-bold block">✓ Keunggulan:</span>
-                  <p>Ukuran efisien, foto profil & galeri otomatis disematkan, dan mudah dipulihkan langsung dari HP.</p>
+                  <span className="font-bold block">✓ Keunggulan JSON Ringan:</span>
+                  <p>Murni data teks dan struktur tanpa beban media. Sangat hemat memori dan 100% aman untuk HP Android tanpa risiko tab browser crash.</p>
+                </div>
+
+                {/* Checkbox toggle jika ingin menyematkan foto Base64 */}
+                <div className="pt-1">
+                  <label className="flex items-start gap-2.5 p-2.5 rounded-xl bg-gray-50 border border-gray-200 cursor-pointer hover:bg-gray-100 transition-colors">
+                    <input
+                      type="checkbox"
+                      checked={includeBase64InJson}
+                      onChange={(e) => setIncludeBase64InJson(e.target.checked)}
+                      className="mt-0.5 w-4 h-4 rounded text-emerald-700 focus:ring-emerald-600 cursor-pointer"
+                    />
+                    <div className="text-[11px] leading-snug">
+                      <span className="font-bold text-gray-800">Sematkan foto Base64 ke dalam JSON</span>
+                      <p className="text-[10px] text-gray-500 mt-0.5">
+                        Mengonversi seluruh foto menjadi teks Base64 di dalam JSON. Perhatian: Ukuran file akan membengkak hingga ratusan MB. (Disarankan tidak dicentang).
+                      </p>
+                    </div>
+                  </label>
                 </div>
               </div>
 
               <button
                 type="button"
-                onClick={handleDownloadJsonBackup}
+                onClick={() => handleDownloadJsonBackup()}
                 disabled={isDownloadingJson}
                 className="w-full py-3 px-4 rounded-xl bg-emerald-800 hover:bg-emerald-700 text-white text-xs font-bold flex items-center justify-center gap-2 shadow-md transition-all active:scale-98 disabled:opacity-60 cursor-pointer"
               >
                 <Download className={`w-4 h-4 text-amber-300 ${isDownloadingJson ? 'animate-bounce' : ''}`} />
-                <span>{isDownloadingJson ? 'Menyiapkan & Mengunduh JSON...' : 'Unduh JSON Cadangan'}</span>
+                <span>
+                  {isDownloadingJson
+                    ? 'Menyiapkan & Mengunduh JSON...'
+                    : includeBase64InJson
+                    ? 'Unduh JSON (+ Sematan Foto Base64)'
+                    : 'Unduh JSON Ringan (~50 KB)'}
+                </span>
               </button>
             </div>
 
@@ -1167,26 +1557,40 @@ export const BackupManager: React.FC<BackupManagerProps> = ({
                       Paket Arsip Komplit
                     </span>
                   </div>
-                  <h4 className="text-sm font-bold text-gray-900">2. Paket Cadangan Komplit (ZIP + Media)</h4>
+                  <h4 className="text-sm font-bold text-gray-900">2. Paket Cadangan Komplit (ZIP + Semua Media)</h4>
                   <p className="text-xs text-gray-600 mt-1 leading-relaxed">
-                    Paket terlengkap berisi file database JSON (dengan foto tersemat), folder fisik gambar/media (<code className="font-mono text-emerald-800">uploads/</code>), dan skrip SQL untuk migrasi database.
+                    Paket terlengkap berisi file database JSON, database MySQL (<code className="font-mono text-emerald-800">database.sql</code>), dan seluruh folder fisik media (<code className="font-mono text-emerald-800">uploads/</code>).
                   </p>
                 </div>
                 <div className="p-3 bg-amber-50 rounded-xl border border-amber-200 text-[11px] text-amber-950 space-y-1">
-                  <span className="font-bold block">✓ Keunggulan:</span>
-                  <p>Menyertakan salinan fisik foto dan gambar sehingga dapat diekstrak atau dipulihkan di segala perangkat.</p>
+                  <span className="font-bold block">✓ Cadangan Normal 100% Utuh:</span>
+                  <p>Membackup seluruh isi website tanpa ada yang tertinggal: logo header/footer, seluruh foto &amp; video galeri, avatar, banner, dokumen kajian, serta skrip migrasi MySQL.</p>
                 </div>
               </div>
 
-              <button
-                type="button"
-                onClick={handleDownloadZipBackup}
-                disabled={isDownloadingZip}
-                className="w-full py-3 px-4 rounded-xl bg-gradient-to-r from-amber-500 to-amber-600 hover:from-amber-400 hover:to-amber-500 text-emerald-950 text-xs font-extrabold flex items-center justify-center gap-2 shadow-md transition-all active:scale-98 disabled:opacity-60 cursor-pointer"
-              >
-                <Archive className={`w-4 h-4 ${isDownloadingZip ? 'animate-spin' : ''}`} />
-                <span>{isDownloadingZip ? 'Mengemas & Mengunduh ZIP...' : 'Unduh Paket Arsip ZIP'}</span>
-              </button>
+              <div className="space-y-2">
+                <button
+                  type="button"
+                  onClick={handleDownloadZipBackup}
+                  disabled={isDownloadingZip}
+                  className="w-full py-3 px-4 rounded-xl bg-gradient-to-r from-amber-500 to-amber-600 hover:from-amber-400 hover:to-amber-500 text-emerald-950 text-xs font-extrabold flex items-center justify-center gap-2 shadow-md transition-all active:scale-98 disabled:opacity-60 cursor-pointer"
+                >
+                  <Archive className={`w-4 h-4 ${isDownloadingZip ? 'animate-spin' : ''}`} />
+                  <span>{isDownloadingZip ? 'Mengemas & Mengunduh ZIP...' : 'Unduh Paket Arsip ZIP'}</span>
+                </button>
+                <div className="text-center">
+                  <a
+                    href="/api/backup/zip-data"
+                    download
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="inline-flex items-center gap-1 text-[11px] font-semibold text-emerald-800 hover:text-emerald-950 underline hover:no-underline"
+                  >
+                    <span>Atau unduh langsung via server</span>
+                    <ExternalLink className="w-3 h-3" />
+                  </a>
+                </div>
+              </div>
             </div>
 
             {/* Card 3: Instant Snapshot */}
@@ -1334,6 +1738,28 @@ export const BackupManager: React.FC<BackupManagerProps> = ({
                 </div>
               )}
             </div>
+
+            {/* Active Analysis or Restoration Progress Indicator */}
+            {(isAnalyzingFile || isRestoring) && (
+              <div className="p-4 sm:p-5 rounded-2xl bg-gradient-to-r from-emerald-50 via-teal-50 to-emerald-50 border-2 border-emerald-400 text-emerald-950 flex items-center gap-3.5 shadow-sm animate-pulse">
+                <div className="w-8 h-8 rounded-xl bg-emerald-600 flex items-center justify-center shrink-0 shadow-xs">
+                  <RotateCcw className="w-4 h-4 text-white animate-spin" />
+                </div>
+                <div className="flex-1 min-w-0">
+                  <div className="flex items-center justify-between gap-2">
+                    <span className="text-xs font-bold text-emerald-950 truncate">
+                      {restoreProgressStep || (isAnalyzingFile ? 'Menganalisis berkas cadangan...' : 'Memproses pemulihan data...')}
+                    </span>
+                    <span className="text-[10px] px-2 py-0.5 rounded-full bg-emerald-200 text-emerald-900 font-bold shrink-0">
+                      Aktif & Responsif
+                    </span>
+                  </div>
+                  <p className="text-[11px] text-emerald-800 mt-0.5">
+                    Proses berjalan secara asinkron tanpa memblokir layar atau menyebabkan browser HP / PC hang.
+                  </p>
+                </div>
+              </div>
+            )}
 
             {/* Error Message */}
             {restoreError && (

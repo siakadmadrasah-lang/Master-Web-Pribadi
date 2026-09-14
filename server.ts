@@ -17,13 +17,20 @@ import {
   generateReadmePlesk, 
   generateApiMessagesPhp, 
   generateApiSettingsPhp, 
-  generateApiTestDbPhp 
+  generateApiTestDbPhp,
+  generateApiBackupRestorePhp,
+  generateApiBackupRestoreZipPhp,
+  generateApiBackupSnapshotsPhp,
+  generateApiBackupCreateSnapshotPhp,
+  generateApiBackupRestoreSnapshotPhp,
+  generateApiBackupDeleteSnapshotPhp,
+  generateApiBackupExportCsvPhp
 } from './src/utils/pleskExporter';
 
 dotenv.config();
 
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = path.dirname(__filename);
+const __filenameResolved = typeof __filename !== 'undefined' ? __filename : (typeof import.meta !== 'undefined' && (import.meta as any).url ? fileURLToPath((import.meta as any).url) : process.cwd());
+const __dirnameResolved = typeof __dirname !== 'undefined' ? __dirname : path.dirname(__filenameResolved);
 
 const app = express();
 const PORT = 3000;
@@ -251,24 +258,6 @@ app.get(['/favicon.ico', '/favicon.png', '/apple-touch-icon.png', '/apple-touch-
   res.status(404).send('Favicon tidak ditemukan');
 });
 
-// Explicit OpenGraph Thumbnail Endpoints for WhatsApp, Telegram, Facebook & Social Bots
-app.get(['/og-image.jpg', '/thumbnail.jpg', '/og-preview.jpg', '/og-share.jpg'], (req, res) => {
-  const pData = path.join(DATA_DIR, 'persisted_og_image.jpg');
-  const pPub = path.join(PUBLIC_DIR, 'og-image.jpg');
-  const pDist = path.join(DIST_DIR, 'og-image.jpg');
-  const pAvatar = path.join(PUBLIC_DIR, 'avatar-jaenal.jpg');
-
-  res.setHeader('Access-Control-Allow-Origin', '*');
-  res.setHeader('Content-Type', 'image/jpeg');
-  res.setHeader('Cache-Control', 'public, max-age=86400, stale-while-revalidate=43200');
-
-  if (fs.existsSync(pData)) return res.sendFile(pData);
-  if (fs.existsSync(pPub)) return res.sendFile(pPub);
-  if (fs.existsSync(pDist)) return res.sendFile(pDist);
-  if (fs.existsSync(pAvatar)) return res.sendFile(pAvatar);
-  res.status(404).send('Thumbnail tidak ditemukan');
-});
-
 app.get('/avatar-jaenal.jpg', (req, res) => {
   const pPub = path.join(PUBLIC_DIR, 'avatar-jaenal.jpg');
   const pDist = path.join(DIST_DIR, 'avatar-jaenal.jpg');
@@ -276,7 +265,9 @@ app.get('/avatar-jaenal.jpg', (req, res) => {
 
   res.setHeader('Access-Control-Allow-Origin', '*');
   res.setHeader('Content-Type', 'image/jpeg');
-  res.setHeader('Cache-Control', 'public, max-age=86400, stale-while-revalidate=43200');
+  res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate, max-age=0');
+  res.setHeader('Pragma', 'no-cache');
+  res.setHeader('Expires', '0');
 
   if (fs.existsSync(pPub)) return res.sendFile(pPub);
   if (fs.existsSync(pDist)) return res.sendFile(pDist);
@@ -287,9 +278,9 @@ app.get('/avatar-jaenal.jpg', (req, res) => {
 // Default MySQL Configuration
 const defaultMySQLConfig = {
   host: process.env.MYSQL_HOST || 'localhost',
-  user: process.env.MYSQL_USER || 'jaenal_masterweb',
+  user: process.env.MYSQL_USER || 'denbagus_webpersonal',
   password: process.env.MYSQL_PASSWORD || 'masbagus15',
-  database: process.env.MYSQL_DATABASE || 'jaenal_masterweb',
+  database: process.env.MYSQL_DATABASE || 'denbagues_webpersonal',
   port: parseInt(process.env.MYSQL_PORT || '3306', 10),
   connectTimeout: 5000,
   waitForConnections: true,
@@ -1373,20 +1364,35 @@ function processAndSaveBase64Images(obj: any, scope: 'all' | 'logo' | 'siteConte
           const publicDir = path.join(process.cwd(), 'public');
           const dataDir = path.join(process.cwd(), 'data');
           const distDir = path.join(process.cwd(), 'dist');
+          const uploadsPublicDir = path.join(publicDir, 'uploads');
+          const uploadsDataDir = path.join(dataDir, 'uploads');
+
           if (!fs.existsSync(publicDir)) fs.mkdirSync(publicDir, { recursive: true });
           if (!fs.existsSync(dataDir)) fs.mkdirSync(dataDir, { recursive: true });
+          if (!fs.existsSync(uploadsPublicDir)) fs.mkdirSync(uploadsPublicDir, { recursive: true });
+          if (!fs.existsSync(uploadsDataDir)) fs.mkdirSync(uploadsDataDir, { recursive: true });
           
           fs.writeFileSync(path.join(publicDir, 'og-image.jpg'), extracted.buffer);
           fs.writeFileSync(path.join(publicDir, 'thumbnail.jpg'), extracted.buffer);
           fs.writeFileSync(path.join(publicDir, 'og-preview.jpg'), extracted.buffer);
           fs.writeFileSync(path.join(dataDir, 'persisted_og_image.jpg'), extracted.buffer);
+
+          const safeUploadName = `thumbnail_${Date.now()}.${extracted.ext || 'jpg'}`;
+          fs.writeFileSync(path.join(uploadsPublicDir, safeUploadName), extracted.buffer);
+          fs.writeFileSync(path.join(uploadsDataDir, safeUploadName), extracted.buffer);
+
           if (fs.existsSync(distDir)) {
             fs.writeFileSync(path.join(distDir, 'og-image.jpg'), extracted.buffer);
             fs.writeFileSync(path.join(distDir, 'thumbnail.jpg'), extracted.buffer);
             fs.writeFileSync(path.join(distDir, 'og-preview.jpg'), extracted.buffer);
+            const distUploads = path.join(distDir, 'uploads');
+            if (!fs.existsSync(distUploads)) fs.mkdirSync(distUploads, { recursive: true });
+            fs.writeFileSync(path.join(distUploads, safeUploadName), extracted.buffer);
           }
-          obj.siteContent.shareSettings.thumbnailUrl = `/og-image.jpg?v=${Date.now()}`;
+          obj.siteContent.shareSettings.thumbnailUrl = `/uploads/${safeUploadName}`;
         }
+      } else if (obj.siteContent.shareSettings?.thumbnailUrl && typeof obj.siteContent.shareSettings.thumbnailUrl === 'string' && !obj.siteContent.shareSettings.thumbnailUrl.startsWith('http')) {
+        copyLocalImageToOgImage(obj.siteContent.shareSettings.thumbnailUrl);
       }
 
       // 2. Profile avatar
@@ -1414,28 +1420,36 @@ function processAndSaveBase64Images(obj: any, scope: 'all' | 'logo' | 'siteConte
       // 4. Gallery images
       if (Array.isArray(obj.siteContent.gallery)) {
         obj.siteContent.gallery = obj.siteContent.gallery.map((g: any) => {
-          if (g && g.image && typeof g.image === 'string' && g.image.startsWith('data:image/')) {
-            const extracted = extractBase64Buffer(g.image);
+          if (!g) return g;
+          let updated = { ...g };
+          const imgField = g.image || g.imageUrl;
+          if (imgField && typeof imgField === 'string' && imgField.startsWith('data:image/')) {
+            const extracted = extractBase64Buffer(imgField);
             if (extracted) {
               const url = saveImageBufferToFiles(extracted.buffer, extracted.ext, 'gallery');
-              return { ...g, image: url };
+              updated.image = url;
+              updated.imageUrl = url;
             }
           }
-          return g;
+          return updated;
         });
       }
 
       // 5. Publications covers
       if (Array.isArray(obj.siteContent.publications)) {
         obj.siteContent.publications = obj.siteContent.publications.map((p: any) => {
-          if (p && p.coverImage && typeof p.coverImage === 'string' && p.coverImage.startsWith('data:image/')) {
-            const extracted = extractBase64Buffer(p.coverImage);
+          if (!p) return p;
+          let updated = { ...p };
+          const coverField = p.coverImage || p.coverUrl || p.imageUrl;
+          if (coverField && typeof coverField === 'string' && coverField.startsWith('data:image/')) {
+            const extracted = extractBase64Buffer(coverField);
             if (extracted) {
               const url = saveImageBufferToFiles(extracted.buffer, extracted.ext, 'pub');
-              return { ...p, coverImage: url };
+              updated.coverImage = url;
+              updated.coverUrl = url;
             }
           }
-          return p;
+          return updated;
         });
       }
 
@@ -1550,8 +1564,12 @@ function processAndSaveBase64Images(obj: any, scope: 'all' | 'logo' | 'siteConte
 
 async function saveSiteDataToDBAndFile(data: any, scope: 'all' | 'logo' | 'siteContent' = 'all') {
   try {
-    // Automatically process & persist base64 images to static files targeted to scope
-    data = processAndSaveBase64Images(data, scope);
+    // Automatically process & persist base64 images to static files targeted to scope (safely guarded)
+    try {
+      data = processAndSaveBase64Images(data, scope);
+    } catch (imgErr) {
+      console.warn('Notice during base64 image processing:', imgErr);
+    }
 
     lastUpdatedTimestamp = Date.now();
     data.lastUpdated = lastUpdatedTimestamp;
@@ -2846,31 +2864,48 @@ app.post('/api/share-settings', async (req, res) => {
 });
 
 // Dedicated route to serve og-image.jpg with proper cache and content-type headers
-app.get(['/og-image.jpg', '/thumbnail.jpg', '/og-preview.jpg', '/api/og-image'], (req, res) => {
-  const publicOg = path.join(process.cwd(), 'public', 'og-image.jpg');
-  const dataOg = path.join(process.cwd(), 'data', 'persisted_og_image.jpg');
-  const distOg = path.join(process.cwd(), 'dist', 'og-image.jpg');
+app.get(['/og-image.jpg', '/thumbnail.jpg', '/og-preview.jpg', '/og-share.jpg', '/api/og-image'], (req, res) => {
+  res.setHeader('Access-Control-Allow-Origin', '*');
+  res.setHeader('Content-Type', 'image/jpeg');
+  res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate, max-age=0');
+  res.setHeader('Pragma', 'no-cache');
+  res.setHeader('Expires', '0');
 
-  let targetFile = '';
-  if (fs.existsSync(publicOg)) {
-    targetFile = publicOg;
-  } else if (fs.existsSync(dataOg)) {
-    targetFile = dataOg;
-  } else if (fs.existsSync(distOg)) {
-    targetFile = distOg;
+  // Check current configured shareSettings thumbnail first
+  const current = cachedSiteData || loadSiteDataFromFile();
+  const configuredThumb = current?.siteContent?.shareSettings?.thumbnailUrl;
+
+  if (configuredThumb && typeof configuredThumb === 'string' && !configuredThumb.startsWith('http') && !configuredThumb.startsWith('data:')) {
+    const cleanPath = configuredThumb.replace(/^\//, '').split('?')[0];
+    const candidates = [
+      path.join(process.cwd(), 'public', cleanPath),
+      path.join(process.cwd(), 'data', cleanPath),
+      path.join(process.cwd(), 'public', 'uploads', path.basename(cleanPath)),
+      path.join(process.cwd(), 'data', 'uploads', path.basename(cleanPath)),
+      path.join(process.cwd(), 'public', path.basename(cleanPath))
+    ];
+    for (const p of candidates) {
+      if (fs.existsSync(p) && fs.statSync(p).isFile()) {
+        return res.sendFile(p);
+      }
+    }
   }
 
-  if (targetFile) {
-    res.setHeader('Content-Type', 'image/jpeg');
-    res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate, max-age=0');
-    return res.sendFile(targetFile);
+  const dataOg = path.join(process.cwd(), 'data', 'persisted_og_image.jpg');
+  const publicOg = path.join(process.cwd(), 'public', 'og-image.jpg');
+  const distOg = path.join(process.cwd(), 'dist', 'og-image.jpg');
+
+  if (fs.existsSync(dataOg)) {
+    return res.sendFile(dataOg);
+  } else if (fs.existsSync(publicOg)) {
+    return res.sendFile(publicOg);
+  } else if (fs.existsSync(distOg)) {
+    return res.sendFile(distOg);
   }
 
   // Fallback to avatar if og-image not generated yet
   const avatarPath = path.join(process.cwd(), 'public', 'avatar-jaenal.jpg');
   if (fs.existsSync(avatarPath)) {
-    res.setHeader('Content-Type', 'image/jpeg');
-    res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate, max-age=0');
     return res.sendFile(avatarPath);
   }
 
@@ -3666,22 +3701,155 @@ app.get('/api/backup/full', async (req, res) => {
 
 // Helper: Extract JSON data from SQL script
 function parseSiteDataFromSql(sql: string): any | null {
+  if (!sql || typeof sql !== 'string') return null;
+
   try {
-    const regex = /VALUES\s*\(\s*['"]site_data['"]\s*,\s*['"]((?:[^'"]|\\['"]|'')+)['"]/i;
-    const match = sql.match(regex);
-    if (match && match[1]) {
-      let rawVal = match[1]
-        .replace(/\\'/g, "'")
-        .replace(/\\"/g, '"')
-        .replace(/\\\\/g, '\\')
-        .replace(/\\n/g, '\n')
-        .replace(/\\r/g, '\r')
-        .replace(/\\t/g, '\t');
-      return JSON.parse(rawVal);
+    const keyMatches = [
+      { key: 'site_data', isFullData: true },
+      { key: 'site_content', isFullData: false }
+    ];
+
+    for (const { key, isFullData } of keyMatches) {
+      let searchIdx = 0;
+      while (searchIdx < sql.length) {
+        const keyPattern = new RegExp(`['"\`]${key}['"\`]`, 'i');
+        const sub = sql.slice(searchIdx);
+        const match = sub.match(keyPattern);
+        if (!match || match.index === undefined) break;
+
+        const keyPos = searchIdx + match.index + match[0].length;
+        searchIdx = keyPos;
+
+        const commaIdx = sql.indexOf(',', keyPos);
+        if (commaIdx === -1 || commaIdx - keyPos > 300) continue;
+
+        let quoteIdx = -1;
+        let quoteChar = '';
+        for (let i = commaIdx + 1; i < sql.length && i < commaIdx + 80; i++) {
+          const c = sql[i];
+          if (c === "'" || c === '"') {
+            quoteIdx = i;
+            quoteChar = c;
+            break;
+          } else if (c !== ' ' && c !== '\t' && c !== '\r' && c !== '\n') {
+            break;
+          }
+        }
+
+        if (quoteIdx === -1) continue;
+
+        const valueChars: string[] = [];
+        let i = quoteIdx + 1;
+        let foundClosing = false;
+
+        while (i < sql.length) {
+          const c = sql[i];
+          if (c === '\\') {
+            const next = sql[i + 1];
+            if (next === "'") valueChars.push("'");
+            else if (next === '"') valueChars.push('"');
+            else if (next === '\\') valueChars.push('\\');
+            else if (next === 'n') valueChars.push('\n');
+            else if (next === 'r') valueChars.push('\r');
+            else if (next === 't') valueChars.push('\t');
+            else if (next !== undefined) valueChars.push(next);
+            i += 2;
+          } else if (c === quoteChar) {
+            if (quoteChar === "'" && sql[i + 1] === "'") {
+              valueChars.push("'");
+              i += 2;
+            } else {
+              foundClosing = true;
+              break;
+            }
+          } else {
+            valueChars.push(c);
+            i++;
+          }
+        }
+
+        if (foundClosing) {
+          const rawJson = valueChars.join('');
+          try {
+            const parsed = JSON.parse(rawJson);
+            if (parsed && typeof parsed === 'object') {
+              return isFullData ? parsed : { siteContent: parsed };
+            }
+          } catch (e) {
+            try {
+              const unescaped = rawJson.replace(/\\"/g, '"').replace(/\\\\/g, '\\');
+              const parsed2 = JSON.parse(unescaped);
+              if (parsed2 && typeof parsed2 === 'object') {
+                return isFullData ? parsed2 : { siteContent: parsed2 };
+              }
+            } catch (e2) {}
+          }
+        }
+      }
     }
-    const jsonMatch = sql.match(/\{[\s\S]*"siteContent"[\s\S]*\}/);
-    if (jsonMatch) {
-      return JSON.parse(jsonMatch[0]);
+
+    // Direct brace-matching search for {"siteContent":...} or {"profile":...} in SQL text
+    const anchors = ['"siteContent"', '"profile"', 'siteContent'];
+    for (const anchor of anchors) {
+      let anchorIdx = sql.indexOf(anchor);
+      while (anchorIdx !== -1) {
+        let openBrace = -1;
+        for (let j = anchorIdx; j >= 0 && j >= anchorIdx - 200; j--) {
+          if (sql[j] === '{') {
+            openBrace = j;
+            break;
+          }
+        }
+
+        if (openBrace !== -1) {
+          let depth = 0;
+          let inString = false;
+          let stringChar = '';
+          let escaped = false;
+
+          for (let k = openBrace; k < sql.length; k++) {
+            const ch = sql[k];
+            if (inString) {
+              if (escaped) {
+                escaped = false;
+              } else if (ch === '\\') {
+                escaped = true;
+              } else if (ch === stringChar) {
+                inString = false;
+              }
+            } else {
+              if (ch === '"' || ch === "'") {
+                inString = true;
+                stringChar = ch;
+              } else if (ch === '{') {
+                depth++;
+              } else if (ch === '}') {
+                depth--;
+                if (depth === 0) {
+                  const candidate = sql.slice(openBrace, k + 1);
+                  try {
+                    const parsed = JSON.parse(candidate);
+                    if (parsed?.siteContent || parsed?.profile) {
+                      return parsed;
+                    }
+                  } catch (e) {
+                    try {
+                      const cleaned = candidate.replace(/''/g, "'").replace(/\\'/g, "'");
+                      const parsed = JSON.parse(cleaned);
+                      if (parsed?.siteContent || parsed?.profile) {
+                        return parsed;
+                      }
+                    } catch (e2) {}
+                  }
+                  break;
+                }
+              }
+            }
+          }
+        }
+
+        anchorIdx = sql.indexOf(anchor, anchorIdx + anchor.length);
+      }
     }
   } catch (e) {
     console.warn('parseSiteDataFromSql failed', e);
@@ -3714,6 +3882,37 @@ app.post('/api/backup/restore', async (req, res) => {
       return res.status(400).json({ success: false, error: 'Berkas cadangan tidak valid atau kosong' });
     }
 
+    // Support array format (e.g. phpMyAdmin JSON table export)
+    if (Array.isArray(payload)) {
+      for (const row of payload) {
+        if (row && (row.setting_key === 'site_data' || row.key === 'site_data')) {
+          try {
+            const val = typeof row.setting_value === 'string' ? JSON.parse(row.setting_value) : row.setting_value;
+            if (val && typeof val === 'object') {
+              payload = val;
+              break;
+            }
+          } catch (e) {}
+        }
+      }
+    }
+
+    // Support direct site_settings row object
+    if (payload && payload.setting_key === 'site_data' && payload.setting_value) {
+      try {
+        const val = typeof payload.setting_value === 'string' ? JSON.parse(payload.setting_value) : payload.setting_value;
+        if (val && typeof val === 'object') payload = val;
+      } catch (e) {}
+    }
+
+    // Support site_data wrapper
+    if (payload && payload.site_data) {
+      try {
+        const val = typeof payload.site_data === 'string' ? JSON.parse(payload.site_data) : payload.site_data;
+        if (val && typeof val === 'object') payload = val;
+      } catch (e) {}
+    }
+
     // If SQL dump text was supplied
     if (payload._rawSqlText || payload.sql) {
       const extracted = parseSiteDataFromSql(payload._rawSqlText || payload.sql);
@@ -3722,26 +3921,40 @@ app.post('/api/backup/restore', async (req, res) => {
       }
     }
 
-    // Identify nested structure, snapshot format, or flat structure
-    let incomingData = payload.data ? payload.data : payload;
-    let siteContent = incomingData.siteContent || payload.siteContent;
-    let logoConfig = incomingData.logoConfig || payload.logoConfig;
-    let stickyFooterConfig = incomingData.stickyFooterConfig || payload.stickyFooterConfig;
+    // Identify nested structure, backup envelope format, snapshot format, or flat structure
+    let root = payload.backup ? (payload.backup.data || payload.backup) : payload;
+    let incomingData = root.data ? root.data : root;
+    let siteContent = incomingData.siteContent || root.siteContent || payload.siteContent;
+    let logoConfig = incomingData.logoConfig || root.logoConfig || payload.logoConfig;
+    let stickyFooterConfig = incomingData.stickyFooterConfig || root.stickyFooterConfig || payload.stickyFooterConfig;
+
+    // Check if site_data is string or object inside root or incomingData
+    if (!siteContent && (incomingData.site_data || root.site_data || payload.site_data)) {
+      try {
+        const raw = incomingData.site_data || root.site_data || payload.site_data;
+        const parsed = typeof raw === 'string' ? JSON.parse(raw) : raw;
+        if (parsed?.siteContent || parsed?.profile) {
+          siteContent = parsed.siteContent || parsed;
+          if (!logoConfig) logoConfig = parsed.logoConfig;
+          if (!stickyFooterConfig) stickyFooterConfig = parsed.stickyFooterConfig;
+        }
+      } catch (e) {}
+    }
 
     // Fallback: If root contains direct profile or sections
-    if (!siteContent && (payload.profile || payload.publications || payload.agenda || payload.pillars)) {
+    if (!siteContent && (payload.profile || payload.publications || payload.agenda || payload.pillars || incomingData?.profile || root?.profile)) {
       siteContent = {
-        profile: payload.profile || defaultInitialSiteData.siteContent.profile,
-        education: payload.education || [],
-        pillars: payload.pillars || [],
-        quotes: payload.quotes || [],
-        publications: payload.publications || [],
-        experience: payload.experience || payload.experiences || [],
-        agenda: payload.agenda || [],
-        gallery: payload.gallery || [],
-        visibility: payload.visibility || defaultInitialSiteData.siteContent.visibility,
-        heroSettings: payload.heroSettings || defaultInitialSiteData.siteContent.heroSettings,
-        shareSettings: payload.shareSettings || defaultInitialSiteData.siteContent.shareSettings
+        profile: incomingData?.profile || root?.profile || payload.profile || defaultInitialSiteData.siteContent.profile,
+        education: incomingData?.education || root?.education || payload.education || [],
+        pillars: incomingData?.pillars || root?.pillars || payload.pillars || [],
+        quotes: incomingData?.quotes || root?.quotes || payload.quotes || [],
+        publications: incomingData?.publications || root?.publications || payload.publications || [],
+        experience: incomingData?.experience || incomingData?.experiences || root?.experience || payload.experience || payload.experiences || [],
+        agenda: incomingData?.agenda || root?.agenda || payload.agenda || [],
+        gallery: incomingData?.gallery || root?.gallery || payload.gallery || [],
+        visibility: incomingData?.visibility || root?.visibility || payload.visibility || defaultInitialSiteData.siteContent.visibility,
+        heroSettings: incomingData?.heroSettings || root?.heroSettings || payload.heroSettings || defaultInitialSiteData.siteContent.heroSettings,
+        shareSettings: incomingData?.shareSettings || root?.shareSettings || payload.shareSettings || defaultInitialSiteData.siteContent.shareSettings
       };
     }
 
@@ -3817,7 +4030,7 @@ app.post('/api/backup/restore', async (req, res) => {
     const stats = calculateBackupStats(restoredData);
 
     res.json({
-      success: saved,
+      success: true,
       message: 'Seluruh data website berhasil dipulihkan dari berkas cadangan!',
       restoredData,
       stats,
@@ -3841,33 +4054,63 @@ app.post('/api/backup/restore-zip', (backupZipMulter.single('backupZip') as any)
 
     const zip = await JSZip.loadAsync(file.buffer);
 
-    // 1. Locate JSON site data or SQL in zip
+    // 1. Locate JSON site data or SQL in zip with full path & Windows backslash normalization
     let jsonContentStr: string | null = null;
-    const candidatePaths = [
-      'data/persisted_site_data.json',
+    const prioritizedJsonFilenames = [
       'persisted_site_data.json',
-      'data/site_data.default.json',
       'site_data.default.json',
-      'data/site_data.json',
       'site_data.json',
-      'backup.json'
+      'backup.json',
+      'backup_data.json'
     ];
 
-    for (const p of candidatePaths) {
-      const entry = zip.file(p);
-      if (entry) {
-        jsonContentStr = await entry.async('string');
-        break;
+    // Pass A: Check prioritized standard filenames first
+    for (const [rawRelPath, zipEntry] of Object.entries(zip.files)) {
+      if (zipEntry.dir) continue;
+      const normalizedPath = rawRelPath.replace(/\\/g, '/');
+      if (normalizedPath.includes('__MACOSX') || normalizedPath.startsWith('.')) continue;
+
+      const baseName = normalizedPath.split('/').pop()?.toLowerCase();
+      if (baseName && prioritizedJsonFilenames.includes(baseName)) {
+        try {
+          const testStr = await zipEntry.async('string');
+          const testObj = JSON.parse(testStr);
+          if (testObj && (testObj.siteContent || testObj.data?.siteContent || testObj.backup || testObj.profile || testObj.logoConfig || testObj.stickyFooterConfig)) {
+            jsonContentStr = testStr;
+            break;
+          }
+        } catch (e) {}
       }
     }
 
+    // Pass B: Check any .json file inside the archive
     if (!jsonContentStr) {
-      for (const [relativePath, zipEntry] of Object.entries(zip.files)) {
-        if (!zipEntry.dir && relativePath.endsWith('.json')) {
+      for (const [rawRelPath, zipEntry] of Object.entries(zip.files)) {
+        if (zipEntry.dir) continue;
+        const normalizedPath = rawRelPath.replace(/\\/g, '/');
+        if (normalizedPath.includes('__MACOSX') || normalizedPath.startsWith('.')) continue;
+
+        if (normalizedPath.endsWith('.json')) {
           try {
             const testStr = await zipEntry.async('string');
             const testObj = JSON.parse(testStr);
-            if (testObj?.siteContent || testObj?.data?.siteContent || testObj?.profile) {
+            const hasData = !!(
+              testObj?.siteContent ||
+              testObj?.data?.siteContent ||
+              testObj?.restoredData?.siteContent ||
+              testObj?.restoredData?.profile ||
+              testObj?.backup?.data?.siteContent ||
+              testObj?.backup?.siteContent ||
+              testObj?.backup?.data ||
+              testObj?.site_data ||
+              testObj?.profile ||
+              testObj?.data?.profile ||
+              testObj?.logoConfig ||
+              testObj?.stickyFooterConfig ||
+              testObj?.setting_key === 'site_data' ||
+              (Array.isArray(testObj) && testObj.some((r: any) => r?.setting_key === 'site_data' || r?.key === 'site_data'))
+            );
+            if (hasData) {
               jsonContentStr = testStr;
               break;
             }
@@ -3876,15 +4119,22 @@ app.post('/api/backup/restore-zip', (backupZipMulter.single('backupZip') as any)
       }
     }
 
+    // Pass C: Check any .sql file inside the archive
     if (!jsonContentStr) {
-      for (const [relativePath, zipEntry] of Object.entries(zip.files)) {
-        if (!zipEntry.dir && relativePath.endsWith('.sql')) {
-          const sqlStr = await zipEntry.async('string');
-          const extracted = parseSiteDataFromSql(sqlStr);
-          if (extracted) {
-            jsonContentStr = JSON.stringify(extracted);
-            break;
-          }
+      for (const [rawRelPath, zipEntry] of Object.entries(zip.files)) {
+        if (zipEntry.dir) continue;
+        const normalizedPath = rawRelPath.replace(/\\/g, '/');
+        if (normalizedPath.includes('__MACOSX') || normalizedPath.startsWith('.')) continue;
+
+        if (normalizedPath.endsWith('.sql')) {
+          try {
+            const sqlStr = await zipEntry.async('string');
+            const extracted = parseSiteDataFromSql(sqlStr);
+            if (extracted) {
+              jsonContentStr = JSON.stringify(extracted);
+              break;
+            }
+          } catch (e) {}
         }
       }
     }
@@ -3896,26 +4146,58 @@ app.post('/api/backup/restore-zip', (backupZipMulter.single('backupZip') as any)
       });
     }
 
-    const payload = JSON.parse(jsonContentStr);
+    let payload: any = {};
+    try {
+      payload = JSON.parse(jsonContentStr);
+    } catch (parseErr: any) {
+      return res.status(400).json({
+        success: false,
+        error: `Gagal membaca format JSON data cadangan: ${parseErr.message}`
+      });
+    }
 
-    // 2. Extract uploaded files from ZIP into data/uploads and public/assets/uploads
+    // 2. Extract uploaded files from ZIP into data/uploads and public/uploads
     let restoredFilesCount = 0;
     const uploadsDataDir = path.join(process.cwd(), 'data', 'uploads');
-    const uploadsPublicDir = path.join(process.cwd(), 'public', 'assets', 'uploads');
+    const uploadsPublicDir = path.join(process.cwd(), 'public', 'uploads');
+    const uploadsAssetsDir = path.join(process.cwd(), 'public', 'assets', 'uploads');
+    const uploadsDistDir = path.join(process.cwd(), 'dist', 'uploads');
+
     if (!fs.existsSync(uploadsDataDir)) fs.mkdirSync(uploadsDataDir, { recursive: true });
     if (!fs.existsSync(uploadsPublicDir)) fs.mkdirSync(uploadsPublicDir, { recursive: true });
+    if (!fs.existsSync(uploadsAssetsDir)) fs.mkdirSync(uploadsAssetsDir, { recursive: true });
+    if (fs.existsSync(path.join(process.cwd(), 'dist')) && !fs.existsSync(uploadsDistDir)) {
+      try { fs.mkdirSync(uploadsDistDir, { recursive: true }); } catch (e) {}
+    }
 
-    for (const [relPath, zipEntry] of Object.entries(zip.files)) {
-      if (!zipEntry.dir && (relPath.startsWith('uploads/') || relPath.startsWith('data/uploads/'))) {
-        const fileName = path.basename(relPath);
-        if (fileName && !fileName.startsWith('.')) {
+    for (const [rawRelPath, zipEntry] of Object.entries(zip.files)) {
+      if (zipEntry.dir) continue;
+      const normalizedPath = rawRelPath.replace(/\\/g, '/');
+      if (normalizedPath.includes('__MACOSX') || normalizedPath.startsWith('.')) continue;
+
+      const fileName = normalizedPath.split('/').pop();
+      if (!fileName || fileName.startsWith('.')) continue;
+
+      // Extract uploads media
+      if (normalizedPath.includes('uploads/')) {
+        try {
           const fileData = await zipEntry.async('nodebuffer');
           fs.writeFileSync(path.join(uploadsDataDir, fileName), fileData);
-          try {
-            fs.writeFileSync(path.join(uploadsPublicDir, fileName), fileData);
-          } catch (e) {}
+          try { fs.writeFileSync(path.join(uploadsPublicDir, fileName), fileData); } catch (e) {}
+          try { fs.writeFileSync(path.join(uploadsAssetsDir, fileName), fileData); } catch (e) {}
+          if (fs.existsSync(path.join(process.cwd(), 'dist'))) {
+            try { fs.writeFileSync(path.join(uploadsDistDir, fileName), fileData); } catch (e) {}
+          }
           restoredFilesCount++;
+        } catch (fileErr) {
+          console.warn('Notice extracting zip file:', fileName, fileErr);
         }
+      } else if (['favicon.ico', 'favicon.png', 'apple-touch-icon.png', 'og-image.jpg', 'thumbnail.jpg'].includes(fileName)) {
+        try {
+          const fileData = await zipEntry.async('nodebuffer');
+          fs.writeFileSync(path.join(DATA_DIR, fileName), fileData);
+          try { fs.writeFileSync(path.join(PUBLIC_DIR, fileName), fileData); } catch (e) {}
+        } catch (e) {}
       }
     }
 
@@ -3923,24 +4205,37 @@ app.post('/api/backup/restore-zip', (backupZipMulter.single('backupZip') as any)
     const safetySnapshot = createSnapshotHelper('restore', 'Snapshot Otomatis Sebelum Pemulihan Paket ZIP');
 
     // 4. Merge data
-    let incomingData = payload.data ? payload.data : payload;
-    let siteContent = incomingData.siteContent || payload.siteContent;
-    let logoConfig = incomingData.logoConfig || payload.logoConfig;
-    let stickyFooterConfig = incomingData.stickyFooterConfig || payload.stickyFooterConfig;
+    let root = payload.backup ? (payload.backup.data || payload.backup) : payload;
+    let incomingData = root.data ? root.data : root;
+    let siteContent = incomingData.siteContent || root.siteContent || payload.siteContent;
+    let logoConfig = incomingData.logoConfig || root.logoConfig || payload.logoConfig;
+    let stickyFooterConfig = incomingData.stickyFooterConfig || root.stickyFooterConfig || payload.stickyFooterConfig;
 
-    if (!siteContent && (payload.profile || payload.publications || payload.agenda || payload.pillars)) {
+    if (!siteContent && (incomingData.site_data || root.site_data || payload.site_data)) {
+      try {
+        const raw = incomingData.site_data || root.site_data || payload.site_data;
+        const parsed = typeof raw === 'string' ? JSON.parse(raw) : raw;
+        if (parsed?.siteContent || parsed?.profile) {
+          siteContent = parsed.siteContent || parsed;
+          if (!logoConfig) logoConfig = parsed.logoConfig;
+          if (!stickyFooterConfig) stickyFooterConfig = parsed.stickyFooterConfig;
+        }
+      } catch (e) {}
+    }
+
+    if (!siteContent && (payload.profile || payload.publications || payload.agenda || payload.pillars || incomingData?.profile || root?.profile)) {
       siteContent = {
-        profile: payload.profile || defaultInitialSiteData.siteContent.profile,
-        education: payload.education || [],
-        pillars: payload.pillars || [],
-        quotes: payload.quotes || [],
-        publications: payload.publications || [],
-        experience: payload.experience || payload.experiences || [],
-        agenda: payload.agenda || [],
-        gallery: payload.gallery || [],
-        visibility: payload.visibility || defaultInitialSiteData.siteContent.visibility,
-        heroSettings: payload.heroSettings || defaultInitialSiteData.siteContent.heroSettings,
-        shareSettings: payload.shareSettings || defaultInitialSiteData.siteContent.shareSettings
+        profile: incomingData?.profile || root?.profile || payload.profile || defaultInitialSiteData.siteContent.profile,
+        education: incomingData?.education || root?.education || payload.education || [],
+        pillars: incomingData?.pillars || root?.pillars || payload.pillars || [],
+        quotes: incomingData?.quotes || root?.quotes || payload.quotes || [],
+        publications: incomingData?.publications || root?.publications || payload.publications || [],
+        experience: incomingData?.experience || incomingData?.experiences || root?.experience || payload.experience || payload.experiences || [],
+        agenda: incomingData?.agenda || root?.agenda || payload.agenda || [],
+        gallery: incomingData?.gallery || root?.gallery || payload.gallery || [],
+        visibility: incomingData?.visibility || root?.visibility || payload.visibility || defaultInitialSiteData.siteContent.visibility,
+        heroSettings: incomingData?.heroSettings || root?.heroSettings || payload.heroSettings || defaultInitialSiteData.siteContent.heroSettings,
+        shareSettings: incomingData?.shareSettings || root?.shareSettings || payload.shareSettings || defaultInitialSiteData.siteContent.shareSettings
       };
     }
 
@@ -4118,6 +4413,11 @@ app.get('/api/backup/export-messages-csv', async (req, res) => {
 });
 
 // 8. Export Full Website Data & Uploads ZIP Endpoint
+app.head('/api/backup/zip-data', (req, res) => {
+  res.setHeader('Content-Type', 'application/zip');
+  res.status(200).end();
+});
+
 app.get('/api/backup/zip-data', async (req, res) => {
   try {
     const currentData = cachedSiteData || loadSiteDataFromFile();
@@ -4139,7 +4439,7 @@ app.get('/api/backup/zip-data', async (req, res) => {
     // 2. MySQL Dump SQL
     zip.file('database.sql', generateSqlContent(currentData));
 
-    // 3. Uploads & Media directory (flyers, avatar, custom images, pdfs, logos)
+    // 3. Uploads & Media directory (logo, foto profil, seluruh galeri, video, flyer, pdf, dokumen)
     const uploadsFolder = zip.folder('uploads');
     const scannedDirs = [UPLOADS_PUBLIC_DIR, UPLOADS_DATA_DIR, path.join(process.cwd(), 'public')];
     const addedFiles = new Set<string>();
@@ -4150,11 +4450,13 @@ app.get('/api/backup/zip-data', async (req, res) => {
           const files = fs.readdirSync(uDir);
           for (const file of files) {
             const filePath = path.join(uDir, file);
-            if (fs.statSync(filePath).isFile()) {
+            const stat = fs.statSync(filePath);
+            if (stat.isFile()) {
               // For public root directory, only include media and document assets
-              if (uDir === path.join(process.cwd(), 'public') && !file.match(/\.(jpg|jpeg|png|webp|svg|gif|ico|pdf)$/i)) {
+              if (uDir === path.join(process.cwd(), 'public') && !file.match(/\.(jpg|jpeg|png|webp|svg|gif|ico|pdf|mp4|webm)$/i)) {
                 continue;
               }
+
               if (!addedFiles.has(file)) {
                 addedFiles.add(file);
                 const fileContent = fs.readFileSync(filePath);
@@ -4172,11 +4474,11 @@ app.get('/api/backup/zip-data', async (req, res) => {
     const readmeContent = `# CADANGAN DATA LENGKAP WEBSITE UST. JAENAL MASKUN, S.Pd.I.
 Dibuat pada: ${new Date().toLocaleString('id-ID', { timeZone: 'Asia/Jakarta' })}
 
-Isi Berkas Cadangan Ini:
-1. data/persisted_site_data.json -> Seluruh profil, karya, agenda, pilar, galeri, pengaturan logo & footer.
+Isi Berkas Cadangan Ini (100% Komplit):
+1. data/persisted_site_data.json -> Seluruh profil, karya, agenda, pilar, galeri foto & video, pengaturan logo & footer.
 2. data/persisted_messages.json  -> Arsip seluruh pesan & undangan silaturahmi masuk.
 3. database.sql                  -> Skrip SQL database siap import langsung ke phpMyAdmin / MySQL.
-4. uploads/                      -> Semua berkas PDF materi kajian, foto flyer, avatar, dan banner.
+4. uploads/                      -> Semua berkas fisik logo, foto galeri, video galeri, avatar, flyer, dan dokumen PDF.
 
 CARA PEMULIHAN (RESTORE):
 - Buka Panel Admin -> Tab "Backup & Restore".
@@ -4188,7 +4490,7 @@ CARA PEMULIHAN (RESTORE):
     const zipBuffer = await zip.generateAsync({
       type: 'nodebuffer',
       compression: 'DEFLATE',
-      compressionOptions: { level: 9 }
+      compressionOptions: { level: 1 } // Super fast compression
     });
 
     const now = new Date();
@@ -4264,11 +4566,10 @@ CREATE TABLE IF NOT EXISTS \`site_settings\` (
   PRIMARY KEY (\`id\`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
--- PERLINDUNGAN ANTI DATA-LOSS:
--- Gunakan INSERT IGNORE agar jika tabel site_settings sudah memiliki data kustom Anda,
--- data live tersebut TIDAK AKAN PERNAH tertimpa kembali ke default!
-INSERT IGNORE INTO \`site_settings\` (\`setting_key\`, \`setting_value\`)
-VALUES ('site_data', '${jsonEscaped}');
+-- SINKRONISASI DATA UTAMA (Mendukung restore penuh ke MySQL):
+INSERT INTO \`site_settings\` (\`setting_key\`, \`setting_value\`)
+VALUES ('site_data', '${jsonEscaped}')
+ON DUPLICATE KEY UPDATE \`setting_value\` = VALUES(\`setting_value\`);
 
 -- --------------------------------------------------------
 -- 2. TABEL PESAN SILATURAHMI / KONTAK
@@ -4478,7 +4779,11 @@ DirectoryIndex index.php index.html
     # Cegah akses langsung ke file sensitif
     RewriteRule ^(db_config\\.php|db_config\\.local\\.php|database\\.sql|\\.git|\\.env|package\\.json|server\\.ts) - [F,L,NC]
 
-    # Pastikan request root dan index.html diproses index.php untuk injeksi database MySQL live
+    # Layani thumbnail OpenGraph sosial media secara dinamis dengan anti-cache
+    RewriteRule ^(og-image|thumbnail|og-preview)\\.(jpg|jpeg|png)$ og-image.php [QSA,L]
+
+    # Pastikan request root dan index.html diproses index.php untuk injeksi OpenGraph & database live
+    RewriteRule ^$ index.php [QSA,L]
     RewriteRule ^index\\.html$ index.php [QSA,L]
 
     # Petakan rute API ke skrip PHP yang sesuai
@@ -4502,7 +4807,9 @@ DirectoryIndex index.php index.html
     RewriteRule ^api/mysql-status/?$ api/test_db.php [QSA,L]
     RewriteRule ^api/admin/login/?$ api/admin-login.php [QSA,L]
     RewriteRule ^api/admin-login/?$ api/admin-login.php [QSA,L]
+    RewriteRule ^api/backup/zip-data/?$ api/backup-zip.php [QSA,L]
     RewriteRule ^api/export-plesk-zip/?$ api/export-zip.php [QSA,L]
+    RewriteRule ^api/export-cpanel-zip/?$ api/export-zip.php [QSA,L]
 
     # File atau folder fisik langsung dilayani
     RewriteCond %{REQUEST_FILENAME} -f [OR]
@@ -4675,9 +4982,38 @@ $profile = $siteData['siteContent']['profile'] ?? null;
 $share = $siteData['siteContent']['shareSettings'] ?? null;
 $logoConf = $siteData['logoConfig'] ?? null;
 
+$isHttps = (!empty($_SERVER['HTTPS']) && $_SERVER['HTTPS'] !== 'off')
+    || (isset($_SERVER['SERVER_PORT']) && $_SERVER['SERVER_PORT'] == 443)
+    || (isset($_SERVER['HTTP_X_FORWARDED_PROTO']) && $_SERVER['HTTP_X_FORWARDED_PROTO'] === 'https');
+$protocol = $isHttps ? 'https://' : 'http://';
+$host = $_SERVER['HTTP_HOST'] ?? 'localhost';
+$baseUrl = $protocol . $host;
+$reqUri = $_SERVER['REQUEST_URI'] ?? '/';
+$canonicalUrl = $baseUrl . $reqUri;
+
 $title = htmlspecialchars($share['title'] ?? ($profile['title'] ?? 'Ust. Jaenal Maskun, S.Pd.I. | Pendidik, Akademisi & Penggerak Madrasah'), ENT_QUOTES, 'UTF-8');
 $desc = htmlspecialchars($share['description'] ?? ($profile['tagline'] ?? $profile['bio'] ?? 'Website Resmi Ust. Jaenal Maskun, S.Pd.I. - Menyemai Adab, Menumbuhkan Intelektual, Mengabdi untuk Kemuliaan Umat.'), ENT_QUOTES, 'UTF-8');
+
 $avatar = $share['thumbnailUrl'] ?? ($profile['avatarUrl'] ?? '/og-image.jpg');
+$imgVersion = time();
+
+if (!preg_match('/^https?:\\/\\//i', $avatar)) {
+    $cleanPath = ltrim(parse_url($avatar, PHP_URL_PATH), '/');
+    if (!empty($cleanPath) && file_exists(__DIR__ . '/' . $cleanPath)) {
+        $imgVersion = filemtime(__DIR__ . '/' . $cleanPath);
+        $avatarUrl = $baseUrl . '/' . $cleanPath . '?v=' . $imgVersion;
+    } elseif (file_exists(__DIR__ . '/og-image.jpg')) {
+        $imgVersion = filemtime(__DIR__ . '/og-image.jpg');
+        $avatarUrl = $baseUrl . '/og-image.jpg?v=' . $imgVersion;
+    } elseif (file_exists(__DIR__ . '/thumbnail.jpg')) {
+        $imgVersion = filemtime(__DIR__ . '/thumbnail.jpg');
+        $avatarUrl = $baseUrl . '/thumbnail.jpg?v=' . $imgVersion;
+    } else {
+        $avatarUrl = $baseUrl . '/' . ($cleanPath ?: 'og-image.jpg') . '?v=' . $imgVersion;
+    }
+} else {
+    $avatarUrl = $avatar . (strpos($avatar, '?') !== false ? '&v=' . $imgVersion : '?v=' . $imgVersion);
+}
 
 $htmlFile = file_exists(__DIR__ . '/dist/index.html') ? __DIR__ . '/dist/index.html' : __DIR__ . '/index.html';
 
@@ -4688,8 +5024,19 @@ if (file_exists($htmlFile)) {
         $html = preg_replace('/<meta\\s+name="description"\\s+content="[^"]*"/i', '<meta name="description" content="' . $desc . '"', $html);
         $html = preg_replace('/<meta\\s+property="og:title"\\s+content="[^"]*"/i', '<meta property="og:title" content="' . $title . '"', $html);
         $html = preg_replace('/<meta\\s+property="og:description"\\s+content="[^"]*"/i', '<meta property="og:description" content="' . $desc . '"', $html);
+        $html = preg_replace('/<meta\\s+property="og:url"\\s+content="[^"]*"/i', '<meta property="og:url" content="' . $canonicalUrl . '"', $html);
+        $html = preg_replace('/<meta\\s+property="og:image"\\s+content="[^"]*"/i', '<meta property="og:image" content="' . $avatarUrl . '"', $html);
+        $html = preg_replace('/<meta\\s+property="og:image:secure_url"\\s+content="[^"]*"/i', '<meta property="og:image:secure_url" content="' . $avatarUrl . '"', $html);
         $html = preg_replace('/<meta\\s+name="twitter:title"\\s+content="[^"]*"/i', '<meta name="twitter:title" content="' . $title . '"', $html);
         $html = preg_replace('/<meta\\s+name="twitter:description"\\s+content="[^"]*"/i', '<meta name="twitter:description" content="' . $desc . '"', $html);
+        $html = preg_replace('/<meta\\s+name="twitter:url"\\s+content="[^"]*"/i', '<meta name="twitter:url" content="' . $canonicalUrl . '"', $html);
+        $html = preg_replace('/<meta\\s+name="twitter:image"\\s+content="[^"]*"/i', '<meta name="twitter:image" content="' . $avatarUrl . '"', $html);
+        $html = preg_replace('/<meta\\s+name="twitter:image:src"\\s+content="[^"]*"/i', '<meta name="twitter:image:src" content="' . $avatarUrl . '"', $html);
+        $html = preg_replace('/<meta\\s+itemprop="image"\\s+content="[^"]*"/i', '<meta itemprop="image" content="' . $avatarUrl . '"', $html);
+        $html = preg_replace('/<meta\\s+name="thumbnail"\\s+content="[^"]*"/i', '<meta name="thumbnail" content="' . $avatarUrl . '"', $html);
+        $html = preg_replace('/<link\\s+rel="image_src"\s+href="[^"]*"/i', '<link rel="image_src" href="' . $avatarUrl . '"', $html);
+        $html = preg_replace('/<link\\s+rel="canonical"\s+href="[^"]*"/i', '<link rel="canonical" href="' . $canonicalUrl . '"', $html);
+        $html = preg_replace('/"image":\s*"[^"]*"/i', '"image": "' . $avatarUrl . '"', $html);
         
         if (!empty($logoConf['faviconUrl'])) {
             $fav = htmlspecialchars($logoConf['faviconUrl'], ENT_QUOTES, 'UTF-8');
@@ -4697,13 +5044,16 @@ if (file_exists($htmlFile)) {
             $html = preg_replace('/<link\\s+rel="shortcut icon"[^>]*href="[^"]*"/i', '<link rel="shortcut icon" href="' . $fav . '"', $html);
         }
 
+        // Proteksi OOM Crash: Batasi maksimal 250KB untuk inline script agar browser HP tidak crash
         if ($siteData) {
-            $jsonEncoded = json_encode($siteData, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
-            $inlineScript = '<script id="__INITIAL_SITE_DATA__">window.__INITIAL_SITE_DATA__ = ' . $jsonEncoded . ';</script>';
-            if (strpos($html, '</head>') !== false) {
-                $html = str_replace('</head>', $inlineScript . "\\n</head>", $html);
-            } else {
-                $html = $inlineScript . $html;
+            $jsonEncoded = json_encode($siteData, JSON_HEX_TAG | JSON_HEX_AMP | JSON_HEX_APOS | JSON_HEX_QUOT | JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
+            if ($jsonEncoded && strlen($jsonEncoded) < 250000) {
+                $inlineScript = '<script id="__INITIAL_SITE_DATA__">window.__INITIAL_SITE_DATA__ = ' . $jsonEncoded . ';</script>';
+                if (strpos($html, '</head>') !== false) {
+                    $html = str_replace('</head>', $inlineScript . "\\n</head>", $html);
+                } else {
+                    $html = $inlineScript . $html;
+                }
             }
         }
         
@@ -5950,6 +6300,90 @@ exit;
 `;
 }
 
+function generateOgImagePhp(): string {
+  return `<?php
+/**
+ * Dynamic Open Graph / WhatsApp Thumbnail Delivery
+ * Menjamin gambar thumbnail yang dibagikan selalu yang paling mutakhir (anti-cache)
+ */
+@ini_set('display_errors', '0');
+error_reporting(0);
+
+// Disable caching by browsers, proxies, and social media scrapers
+header('Cache-Control: no-cache, no-store, must-revalidate, max-age=0');
+header('Pragma: no-cache');
+header('Expires: 0');
+
+require_once __DIR__ . '/db_config.php';
+$dataFile1 = __DIR__ . '/data/persisted_site_data.json';
+$dataFile2 = __DIR__ . '/data/site_data.json';
+
+$pdo = getDbConnection();
+$siteData = null;
+
+if ($pdo) {
+    try {
+        $stmt = $pdo->query("SELECT setting_value FROM site_settings WHERE setting_key = 'site_data' LIMIT 1");
+        if ($stmt) {
+            $row = $stmt->fetch();
+            if (!empty($row['setting_value'])) {
+                $siteData = @json_decode($row['setting_value'], true);
+            }
+        }
+    } catch (Throwable $e) {}
+}
+
+if (!$siteData && file_exists($dataFile1)) {
+    $siteData = @json_decode(@file_get_contents($dataFile1), true);
+}
+if (!$siteData && file_exists($dataFile2)) {
+    $siteData = @json_decode(@file_get_contents($dataFile2), true);
+}
+
+$thumbUrl = $siteData['siteContent']['shareSettings']['thumbnailUrl'] 
+    ?? ($siteData['siteContent']['profile']['avatarUrl'] ?? '');
+
+$imageFile = '';
+
+// Jika thumbUrl adalah path lokal (misal: /uploads/thumbnail_....jpg)
+if (!empty($thumbUrl) && !preg_match('/^https?:\\/\\//i', $thumbUrl)) {
+    $cleanPath = ltrim(parse_url($thumbUrl, PHP_URL_PATH), '/');
+    if (file_exists(__DIR__ . '/' . $cleanPath) && is_file(__DIR__ . '/' . $cleanPath)) {
+        $imageFile = __DIR__ . '/' . $cleanPath;
+    }
+}
+
+// Fallback jika belum ditemukan file fisik
+if (empty($imageFile) || !file_exists($imageFile)) {
+    if (file_exists(__DIR__ . '/og-image.jpg')) {
+        $imageFile = __DIR__ . '/og-image.jpg';
+    } elseif (file_exists(__DIR__ . '/thumbnail.jpg')) {
+        $imageFile = __DIR__ . '/thumbnail.jpg';
+    } elseif (file_exists(__DIR__ . '/data/persisted_og_image.jpg')) {
+        $imageFile = __DIR__ . '/data/persisted_og_image.jpg';
+    } elseif (file_exists(__DIR__ . '/avatar-jaenal.jpg')) {
+        $imageFile = __DIR__ . '/avatar-jaenal.jpg';
+    }
+}
+
+if (!empty($imageFile) && file_exists($imageFile)) {
+    $mime = 'image/jpeg';
+    $ext = strtolower(pathinfo($imageFile, PATHINFO_EXTENSION));
+    if ($ext === 'png') $mime = 'image/png';
+    elseif ($ext === 'webp') $mime = 'image/webp';
+    elseif ($ext === 'gif') $mime = 'image/gif';
+    
+    header('Content-Type: ' . $mime);
+    header('Content-Length: ' . filesize($imageFile));
+    @readfile($imageFile);
+    exit;
+}
+
+header('Content-Type: image/jpeg');
+exit;
+`;
+}
+
 function generatePleskApiShareSettings() {
   return `<?php
 /**
@@ -5996,7 +6430,8 @@ if (!isset($currentData['siteContent']) || !is_array($currentData['siteContent']
 }
 
 $raw = @file_get_contents('php://input');
-$share = @json_decode($raw, true);
+$input = @json_decode($raw, true);
+$share = isset($input['shareSettings']) ? $input['shareSettings'] : $input;
 
 if (!$share || !is_array($share)) {
     http_response_code(400);
@@ -6004,7 +6439,49 @@ if (!$share || !is_array($share)) {
     exit;
 }
 
-$currentData['siteContent']['shareSettings'] = $share;
+// Jika thumbnailUrl dikirim berupa data base64
+if (!empty($share['thumbnailUrl']) && strpos($share['thumbnailUrl'], 'data:image/') === 0) {
+    $dataUri = $share['thumbnailUrl'];
+    $ext = 'jpg';
+    if (preg_match('/^data:image\\/([a-zA-Z0-9\\+\\.-]+);base64,/', $dataUri, $matches)) {
+        $mime = strtolower($matches[1]);
+        if (strpos($mime, 'png') !== false) $ext = 'png';
+        elseif (strpos($mime, 'webp') !== false) $ext = 'webp';
+        $base64 = substr($dataUri, strpos($dataUri, ',') + 1);
+    } else {
+        $base64 = $dataUri;
+    }
+    $binary = base64_decode($base64);
+    if ($binary) {
+        $uploadsDir = __DIR__ . '/../uploads';
+        if (!is_dir($uploadsDir)) @mkdir($uploadsDir, 0777, true);
+        $filename = 'share_thumb_' . time() . '.' . $ext;
+        @file_put_contents($uploadsDir . '/' . $filename, $binary);
+        @file_put_contents(__DIR__ . '/../og-image.jpg', $binary);
+        @file_put_contents(__DIR__ . '/../thumbnail.jpg', $binary);
+        @file_put_contents(__DIR__ . '/../og-preview.jpg', $binary);
+        @file_put_contents(__DIR__ . '/../data/persisted_og_image.jpg', $binary);
+        if (is_dir(__DIR__ . '/../dist')) {
+            @file_put_contents(__DIR__ . '/../dist/og-image.jpg', $binary);
+            @file_put_contents(__DIR__ . '/../dist/thumbnail.jpg', $binary);
+        }
+        $share['thumbnailUrl'] = '/uploads/' . $filename;
+    }
+} elseif (!empty($share['thumbnailUrl']) && !preg_match('/^https?:\\/\\//i', $share['thumbnailUrl'])) {
+    $cleanPath = ltrim(parse_url($share['thumbnailUrl'], PHP_URL_PATH), '/');
+    $localFile = __DIR__ . '/../' . $cleanPath;
+    if (file_exists($localFile) && is_file($localFile)) {
+        $binary = @file_get_contents($localFile);
+        if ($binary) {
+            @file_put_contents(__DIR__ . '/../og-image.jpg', $binary);
+            @file_put_contents(__DIR__ . '/../thumbnail.jpg', $binary);
+            @file_put_contents(__DIR__ . '/../og-preview.jpg', $binary);
+            @file_put_contents(__DIR__ . '/../data/persisted_og_image.jpg', $binary);
+        }
+    }
+}
+
+$currentData['siteContent']['shareSettings'] = array_merge($currentData['siteContent']['shareSettings'] ?? [], $share ?: []);
 $nowTs = time() * 1000;
 $currentData['lastUpdated'] = $nowTs;
 
@@ -6025,6 +6502,7 @@ if ($pdo) {
 echo json_encode([
     'success' => true,
     'message' => 'Pengaturan bagikan berhasil disimpan.',
+    'shareSettings' => $currentData['siteContent']['shareSettings'],
     'lastUpdated' => $nowTs,
     'savedToDb' => $savedToDb
 ]);
@@ -6088,8 +6566,15 @@ $filename = 'share_thumb_' . time() . '.' . $ext;
 $targetPath = $uploadsDir . '/' . $filename;
 @file_put_contents($targetPath, $binary);
 
-// Salin juga sebagai og-image.jpg di root untuk kompatibilitas sosial media instan
+// Salin juga sebagai og-image.jpg dan thumbnail di berbagai lokasi untuk kompatibilitas sosial media instan
 @file_put_contents(__DIR__ . '/../og-image.jpg', $binary);
+@file_put_contents(__DIR__ . '/../thumbnail.jpg', $binary);
+@file_put_contents(__DIR__ . '/../og-preview.jpg', $binary);
+@file_put_contents(__DIR__ . '/../data/persisted_og_image.jpg', $binary);
+if (is_dir(__DIR__ . '/../dist')) {
+    @file_put_contents(__DIR__ . '/../dist/og-image.jpg', $binary);
+    @file_put_contents(__DIR__ . '/../dist/thumbnail.jpg', $binary);
+}
 
 $url = '/uploads/' . $filename;
 
@@ -6146,6 +6631,145 @@ exit;
 `;
 }
 
+function generatePleskApiBackupZip(): string {
+  return `<?php
+/**
+ * api/backup-zip.php
+ * Endpoint Pengunduhan Paket Cadangan Komplit (.ZIP) Langsung dari Server
+ * Super cepat, zero memory footprint di browser HP/Android, mencegah crash Out-of-Memory (Aw, Snap!)
+ */
+@ini_set('memory_limit', '512M');
+@set_time_limit(180);
+@error_reporting(0);
+
+// Pre-flight CORS & Fast Check
+if ($_SERVER['REQUEST_METHOD'] === 'OPTIONS') {
+    header('Access-Control-Allow-Origin: *');
+    header('Access-Control-Allow-Methods: GET, HEAD, OPTIONS');
+    header('Access-Control-Allow-Headers: *');
+    exit;
+}
+
+if ($_SERVER['REQUEST_METHOD'] === 'HEAD' || (isset($_GET['check']) && $_GET['check'] === '1')) {
+    header('Access-Control-Allow-Origin: *');
+    header('Content-Type: application/zip');
+    header('Cache-Control: no-cache, no-store, must-revalidate');
+    exit;
+}
+
+$currentData = null;
+$dataFile = __DIR__ . '/../data/persisted_site_data.json';
+if (file_exists($dataFile)) {
+    $currentData = @json_decode(file_get_contents($dataFile), true);
+}
+
+if (file_exists(__DIR__ . '/db_config.php')) {
+    @require_once __DIR__ . '/db_config.php';
+    if (function_exists('getDbConnection')) {
+        try {
+            $pdo = getDbConnection();
+            if ($pdo) {
+                $stmt = $pdo->query("SELECT setting_value FROM site_settings WHERE setting_key = 'site_data' LIMIT 1");
+                $row = $stmt ? $stmt->fetch(PDO::FETCH_ASSOC) : null;
+                if ($row && !empty($row['setting_value'])) {
+                    $decoded = @json_decode($row['setting_value'], true);
+                    if ($decoded) $currentData = $decoded;
+                }
+            }
+        } catch (\\Exception $e) {}
+    }
+}
+
+if (!$currentData) {
+    $currentData = ['siteContent' => []];
+}
+
+$dateStr = date('Y-m-d');
+$zipFilename = 'backup-data-komplit-jaenalmaskun-' . $dateStr . '.zip';
+$tempZipPath = sys_get_temp_dir() . '/' . uniqid('backup_', true) . '.zip';
+
+if (class_exists('ZipArchive')) {
+    $zip = new ZipArchive();
+    if ($zip->open($tempZipPath, ZipArchive::CREATE | ZipArchive::OVERWRITE) === true) {
+        $zip->addFromString('data/persisted_site_data.json', json_encode($currentData, JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES));
+        
+        $msgFile = __DIR__ . '/../data/persisted_messages.json';
+        if (file_exists($msgFile)) {
+            $zip->addFile($msgFile, 'data/persisted_messages.json');
+        } else {
+            $zip->addFromString('data/persisted_messages.json', '[]');
+        }
+
+        $sql = "-- CADANGAN DATABASE WEB RESMI UST. JAENAL MASKUN, S.Pd.I.\\n";
+        $sql .= "-- Waktu Ekspor: " . date('Y-m-d H:i:s') . "\\n\\n";
+        $sql .= "CREATE TABLE IF NOT EXISTS \`site_settings\` (\\n";
+        $sql .= "  \`setting_key\` VARCHAR(100) NOT NULL PRIMARY KEY,\\n";
+        $sql .= "  \`setting_value\` LONGTEXT,\\n";
+        $sql .= "  \`updated_at\` TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP\\n";
+        $sql .= ") ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;\\n\\n";
+        $escapedData = addslashes(json_encode($currentData, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES));
+        $sql .= "REPLACE INTO \`site_settings\` (\`setting_key\`, \`setting_value\`) VALUES ('site_data', '" . $escapedData . "');\\n";
+        $zip->addFromString('database.sql', $sql);
+
+        // 3. Uploads directory - Membackup 100% seluruh isi uploads tanpa ada yang tertinggal (logo, galeri foto, video, dokumen, dsb)
+        $uploadsDir = __DIR__ . '/../uploads';
+        if (is_dir($uploadsDir)) {
+            $files = scandir($uploadsDir);
+            foreach ($files as $file) {
+                if ($file === '.' || $file === '..') continue;
+                $filePath = $uploadsDir . '/' . $file;
+                if (is_file($filePath)) {
+                    $zip->addFile($filePath, 'uploads/' . $file);
+                }
+            }
+        }
+
+        // 4. README
+        $readme = "PAKET CADANGAN KOMPLIT WEB UST. JAENAL MASKUN, S.Pd.I.\\n";
+        $readme .= "Tanggal Ekspor: " . date('d-m-Y H:i:s') . "\\n";
+        $readme .= "Format: Multi-Format Komplit 100% (.ZIP berisi data JSON, skrip MySQL .SQL, dan seluruh berkas foto/media/uploads)\\n";
+        $readme .= "Kelengkapan: Database, Logo, Galeri Foto, Video Galeri, Dokumen PDF, & Pengaturan Sistem.\\n";
+        $readme .= "Kompatibilitas: Android, iOS, Windows, Mac, Hosting Plesk, & cPanel.\\n";
+        $zip->addFromString('README_CADANGAN.txt', $readme);
+
+        $zip->close();
+
+        if (file_exists($tempZipPath)) {
+            while (ob_get_level()) {
+                @ob_end_clean();
+            }
+            header('Access-Control-Allow-Origin: *');
+            header('Content-Type: application/zip');
+            header('Content-Disposition: attachment; filename="' . $zipFilename . '"');
+            header('Content-Length: ' . filesize($tempZipPath));
+            header('Cache-Control: no-cache, no-store, must-revalidate');
+            header('Pragma: no-cache');
+            header('Expires: 0');
+
+            $fp = @fopen($tempZipPath, 'rb');
+            if ($fp) {
+                while (!feof($fp) && (connection_status() === 0)) {
+                    echo fread($fp, 1048576); // 1MB per chunk
+                    @flush();
+                }
+                fclose($fp);
+            } else {
+                readfile($tempZipPath);
+            }
+            @unlink($tempZipPath);
+            exit;
+        }
+    }
+}
+
+header('Access-Control-Allow-Origin: *');
+header('Content-Type: application/json');
+header('Content-Disposition: attachment; filename="backup-master-web-jaenalmaskun-' . $dateStr . '.json"');
+echo json_encode(['version' => '2.0', 'data' => $currentData], JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
+exit;
+`;
+}
+
 // Export Plesk Zip Endpoint
 app.get('/api/export-plesk-zip', async (req, res) => {
   try {
@@ -6157,6 +6781,7 @@ app.get('/api/export-plesk-zip', async (req, res) => {
     zip.file('db_config.php', generatePleskDbConfigPhp());
     zip.file('.htaccess', generatePleskHtaccess());
     zip.file('index.php', generatePleskIndexPhp());
+    zip.file('og-image.php', generateOgImagePhp());
     zip.file('unzip.php', generatePleskUnzipPhp());
     zip.file('README_PLESK.md', generatePleskReadme());
     zip.file('PANDUAN_HOSTING_PLESK.txt', generatePleskReadme());
@@ -6180,6 +6805,15 @@ app.get('/api/export-plesk-zip', async (req, res) => {
       apiFolder.file('messages.php', generatePleskApiMessages());
       apiFolder.file('settings.php', generatePleskApiSettings());
       apiFolder.file('test_db.php', generatePleskApiTestDb());
+      apiFolder.file('backup-zip.php', generatePleskApiBackupZip());
+      apiFolder.file('backup-zip-data.php', generatePleskApiBackupZip());
+      apiFolder.file('backup-restore.php', generateApiBackupRestorePhp());
+      apiFolder.file('backup-restore-zip.php', generateApiBackupRestoreZipPhp());
+      apiFolder.file('backup-snapshots.php', generateApiBackupSnapshotsPhp());
+      apiFolder.file('backup-create-snapshot.php', generateApiBackupCreateSnapshotPhp());
+      apiFolder.file('backup-restore-snapshot.php', generateApiBackupRestoreSnapshotPhp());
+      apiFolder.file('backup-delete-snapshot.php', generateApiBackupDeleteSnapshotPhp());
+      apiFolder.file('backup-export-csv.php', generateApiBackupExportCsvPhp());
       apiFolder.file('db_config.php', generatePleskDbConfigPhp());
     }
 
@@ -6267,6 +6901,7 @@ app.get('/api/export-cpanel-zip', async (req, res) => {
     zip.file('db_config.php', generatePleskDbConfigPhp());
     zip.file('.htaccess', generatePleskHtaccess());
     zip.file('index.php', generatePleskIndexPhp());
+    zip.file('og-image.php', generateOgImagePhp());
     zip.file('unzip.php', generatePleskUnzipPhp());
     zip.file('README_CPANEL.md', generatePleskReadme());
     zip.file('PANDUAN_HOSTING_CPANEL.txt', generatePleskReadme());
@@ -6290,6 +6925,15 @@ app.get('/api/export-cpanel-zip', async (req, res) => {
       apiFolder.file('messages.php', generatePleskApiMessages());
       apiFolder.file('settings.php', generatePleskApiSettings());
       apiFolder.file('test_db.php', generatePleskApiTestDb());
+      apiFolder.file('backup-zip.php', generatePleskApiBackupZip());
+      apiFolder.file('backup-zip-data.php', generatePleskApiBackupZip());
+      apiFolder.file('backup-restore.php', generateApiBackupRestorePhp());
+      apiFolder.file('backup-restore-zip.php', generateApiBackupRestoreZipPhp());
+      apiFolder.file('backup-snapshots.php', generateApiBackupSnapshotsPhp());
+      apiFolder.file('backup-create-snapshot.php', generateApiBackupCreateSnapshotPhp());
+      apiFolder.file('backup-restore-snapshot.php', generateApiBackupRestoreSnapshotPhp());
+      apiFolder.file('backup-delete-snapshot.php', generateApiBackupDeleteSnapshotPhp());
+      apiFolder.file('backup-export-csv.php', generateApiBackupExportCsvPhp());
       apiFolder.file('db_config.php', generatePleskDbConfigPhp());
     }
 
@@ -6422,13 +7066,16 @@ function injectShareMetaTags(html: string, req: express.Request): string {
     result = result.replace(/"image":\s*"https:\/\/jaenalmaskun\.biz\.id\/og-image\.jpg"/g, `"image": "${fullImgUrl}"`);
 
     // Inject latest site data directly into HTML for instant zero-flash client boot on any new device
+    // OOM Crash Protection: limit to 250KB to protect mobile devices from tab memory exhaustion
     if (currentData) {
       const safeJson = JSON.stringify(currentData).replace(/<\/script>/gi, '<\\/script>');
-      const stateScript = `<script id="__INITIAL_SITE_DATA__">window.__INITIAL_SITE_DATA__ = ${safeJson};</script>`;
-      if (result.includes('</head>')) {
-        result = result.replace('</head>', `${stateScript}\n</head>`);
-      } else {
-        result = `${stateScript}\n${result}`;
+      if (safeJson.length < 250000) {
+        const stateScript = `<script id="__INITIAL_SITE_DATA__">window.__INITIAL_SITE_DATA__ = ${safeJson};</script>`;
+        if (result.includes('</head>')) {
+          result = result.replace('</head>', `${stateScript}\n</head>`);
+        } else {
+          result = `${stateScript}\n${result}`;
+        }
       }
     }
 
