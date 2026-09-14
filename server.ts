@@ -5199,6 +5199,12 @@ $baseUrl = $protocol . $host;
 $reqUri = $_SERVER['REQUEST_URI'] ?? '/';
 $canonicalUrl = $baseUrl . $reqUri;
 
+$scriptDir = rtrim(dirname($_SERVER['SCRIPT_NAME'] ?? ''), '/\\');
+if ($scriptDir === '\\' || $scriptDir === '.' || $scriptDir === '/') {
+    $scriptDir = '';
+}
+$baseAppUrl = $baseUrl . $scriptDir;
+
 $title = htmlspecialchars($share['title'] ?? ($profile['title'] ?? 'Ust. Jaenal Maskun, S.Pd.I. | Pendidik, Akademisi & Penggerak Madrasah'), ENT_QUOTES, 'UTF-8');
 $desc = htmlspecialchars($share['description'] ?? ($profile['tagline'] ?? $profile['bio'] ?? 'Website Resmi Ust. Jaenal Maskun, S.Pd.I. - Menyemai Adab, Menumbuhkan Intelektual, Mengabdi untuk Kemuliaan Umat.'), ENT_QUOTES, 'UTF-8');
 
@@ -5209,15 +5215,15 @@ if (!preg_match('/^https?:\\/\\//i', $avatar)) {
     $cleanPath = ltrim(parse_url($avatar, PHP_URL_PATH), '/');
     if (!empty($cleanPath) && file_exists(__DIR__ . '/' . $cleanPath)) {
         $imgVersion = filemtime(__DIR__ . '/' . $cleanPath);
-        $avatarUrl = $baseUrl . '/' . $cleanPath . '?v=' . $imgVersion;
+        $avatarUrl = $baseAppUrl . '/' . $cleanPath . '?v=' . $imgVersion;
     } elseif (file_exists(__DIR__ . '/og-image.jpg')) {
         $imgVersion = filemtime(__DIR__ . '/og-image.jpg');
-        $avatarUrl = $baseUrl . '/og-image.jpg?v=' . $imgVersion;
+        $avatarUrl = $baseAppUrl . '/og-image.jpg?v=' . $imgVersion;
     } elseif (file_exists(__DIR__ . '/thumbnail.jpg')) {
         $imgVersion = filemtime(__DIR__ . '/thumbnail.jpg');
-        $avatarUrl = $baseUrl . '/thumbnail.jpg?v=' . $imgVersion;
+        $avatarUrl = $baseAppUrl . '/thumbnail.jpg?v=' . $imgVersion;
     } else {
-        $avatarUrl = $baseUrl . '/' . ($cleanPath ?: 'og-image.jpg') . '?v=' . $imgVersion;
+        $avatarUrl = $baseAppUrl . '/' . ($cleanPath ?: 'og-image.jpg') . '?v=' . $imgVersion;
     }
 } else {
     $avatarUrl = $avatar . (strpos($avatar, '?') !== false ? '&v=' . $imgVersion : '?v=' . $imgVersion);
@@ -5263,6 +5269,19 @@ if (file_exists($htmlFile)) {
                     $html = $inlineScript . $html;
                 }
             }
+        }
+        
+        // Otomatis sesuaikan path assets, icon & upload jika ditaruh di folder dalam public_html
+        if (!empty($scriptDir)) {
+            $html = preg_replace('/href="\\/assets\\//i', 'href="' . $scriptDir . '/assets/', $html);
+            $html = preg_replace('/src="\\/assets\\//i', 'src="' . $scriptDir . '/assets/', $html);
+            $html = preg_replace('/href="\\/favicon/i', 'href="' . $scriptDir . '/favicon', $html);
+            $html = preg_replace('/href="\\/apple-touch-icon/i', 'href="' . $scriptDir . '/apple-touch-icon', $html);
+            $html = preg_replace('/href="\\/avatar-jaenal/i', 'href="' . $scriptDir . '/avatar-jaenal', $html);
+            $html = preg_replace('/src="\\/avatar-jaenal/i', 'src="' . $scriptDir . '/avatar-jaenal', $html);
+            $html = preg_replace('/src="\\/og-image/i', 'src="' . $scriptDir . '/og-image', $html);
+            $html = str_replace('"/uploads/', '"' . $scriptDir . '/uploads/', $html);
+            $html = str_replace('\'/uploads/', '\'' . $scriptDir . '/uploads/', $html);
         }
         
         @header('Content-Type: text/html; charset=utf-8');
@@ -6293,68 +6312,67 @@ if (file_exists(__DIR__ . '/bridge.html')) {
 
 function generateCpanelFolderGuide() {
   return `================================================================================
-PANDUAN MENGAKSES WEBSITE CPANEL JIKA DITARUH DI LUAR / SELAIN PUBLIC_HTML
+PANDUAN MENJALANKAN WEBSITE DI DALAM SUBFOLDER PUBLIC_HTML (cPanel)
 Web Personal Ust. Jaenal Maskun, S.Pd.I.
 ================================================================================
 
-Apakah file website dapat diakses publik meski ditaruh di folder selain public_html?
-JAWABANNYA: YA, BISA! 
+Apakah website bisa langsung aktif jika ditaruh di dalam folder buatan Anda
+di dalam public_html (misal: public_html/web/ atau public_html/profil/)?
 
-Secara default di cPanel (web server Apache), folder yang terbuka untuk publik adalah
-folder "public_html". Jika Anda meletakkan file di folder lain, gunakan salah satu
-dari 4 pilihan solusi praktis berikut:
+JAWABANNYA: YA, 100% BISA & LANGSUNG AKTIF OTOMATIS!
 
---------------------------------------------------------------------------------
-SOLUSI 1: GUNAKAN SUBDOMAIN / ADDON DOMAIN (CARA PALING RESMI & DIREKOMENDASIKAN)
---------------------------------------------------------------------------------
-cPanel mengizinkan Document Root sebuah Subdomain atau Addon Domain diarahkan
-ke folder mana pun, termasuk folder di luar public_html!
-
-Langkah-langkah:
-1. Masuk ke cPanel hosting Anda.
-2. Buka menu "Domains" atau "Subdomains".
-3. Buat domain/subdomain baru (misal: web.domainanda.com atau ustadz.domainanda.com).
-4. Pada kolom "Document Root", isi dengan lokasi folder tempat Anda mengekstrak ZIP
-   (Contoh: /home/username/web_pribadi atau /home/username/jaenalmaskun).
-5. Klik "Create" / "Submit".
-6. Selesai! Website Anda langsung dapat diakses publik 100% melalui subdomain tersebut
-   tanpa perlu menyentuh folder public_html sama sekali!
+Website ini telah dirancang khusus dengan sistem "Self-Adaptive Subfolder Engine":
+- Skrip CSS & JavaScript menggunakan relative base path (./assets/...)
+- Panggilan API (/api/...) dan gambar (/uploads/...) otomatis disesuaikan
+  ke nama subfolder apa pun yang Anda gunakan secara dinamis.
+- Database MySQL & file JSON diatur menggunakan path server lokal (__DIR__).
 
 --------------------------------------------------------------------------------
-SOLUSI 2: GUNAKAN FILE JEMBATAN "bridge.html" (REDIRECTOR OTOMATIS)
+LANGKAH 1: EKSTRAK ZIP KE SUBFOLDER PILIHAN ANDA
 --------------------------------------------------------------------------------
-Jika Anda mengekstrak website ke subfolder (misal: public_html/web/ atau 
-public_html/profil/):
-
-Langkah-langkah:
-1. Salin berkas "bridge.html" dari paket ZIP ini ke folder "public_html/".
-2. Ubah nama berkas tersebut menjadi "index.html" di dalam "public_html/".
-3. Setiap kali pengunjung membuka https://domainanda.com, browser akan langsung
-   otomatis dialihkan ke subfolder website Anda (misal: https://domainanda.com/web/).
-
---------------------------------------------------------------------------------
-SOLUSI 3: GUNAKAN TAUTAN SIMBOLIK (SYMLINK) DENGAN "symlink_maker.php"
---------------------------------------------------------------------------------
-Jika Anda menaruh folder website di luar public_html (misal: /home/username/web_pribadi):
-
-Langkah-langkah:
-1. Salin berkas "symlink_maker.php" ke dalam folder "public_html/".
-2. Buka browser dan akses: https://domainanda.com/symlink_maker.php
-3. Masukkan lokasi folder luar Anda, lalu klik "Buat Tautan Simbolik".
-4. Skrip akan membuat link simbolik sehingga folder luar tersebut langsung
-   bisa diakses publik melalui https://domainanda.com/web/.
-5. Setelah berhasil, Anda dapat menghapus berkas "symlink_maker.php".
+1. Masuk ke cPanel > File Manager.
+2. Buka folder "public_html".
+3. Buat folder baru sesuai keinginan Anda, contoh:
+   - "web"       -> lokasi: public_html/web/
+   - "profil"    -> lokasi: public_html/profil/
+   - "ustadz"    -> lokasi: public_html/ustadz/
+4. Upload file ZIP ini ke dalam folder tersebut, lalu klik kanan > "Extract".
+5. Pastikan semua berkas (.htaccess, index.php, index.html, folder api, dll)
+   berada langsung di dalam folder tersebut (bukan tersarang di subfolder ganda).
 
 --------------------------------------------------------------------------------
-SOLUSI 4: GUNAKAN "index_bridge.php" SEBAGAI PROXY/WRAPPER DI PUBLIC_HTML
+LANGKAH 2: CARA AKSES WEBSITE ANDA
 --------------------------------------------------------------------------------
-1. Salin berkas "index_bridge.php" ke dalam folder "public_html/".
-2. Ubah namanya menjadi "index.php" di dalam "public_html/".
-3. Berkas ini akan otomatis mendeteksi dan memuat website dari folder tujuan Anda
-   secara langsung tanpa mengubah tampilan URL di browser!
+Website Anda LANGSUNG AKTIF dan bisa dibuka di browser:
+👉 https://domainanda.com/nama-folder/
+(Contoh: https://domainanda.com/web/ atau https://domainanda.com/profil/)
+
+Semua fitur (halaman utama, tasbih digital, modul madrasah, form pesan, galeri,
+hingga admin portal) langsung bekerja penuh!
+
+--------------------------------------------------------------------------------
+LANGKAH 3 (OPSIONAL): INGIN DOMAIN UTAMA OTOMATIS MEMBUKA SUBFOLDER TERSEBUT?
+--------------------------------------------------------------------------------
+Jika Anda ingin saat seseorang membuka https://domainanda.com (tanpa mengetik nama
+folder) langsung otomatis menampilkan website di dalam subfolder:
+
+PILIHAN A (Paling Mudah - Pakai bridge.html):
+1. Salin berkas "bridge.html" dari subfolder ke folder root "public_html/".
+2. Ubah nama berkasnya di "public_html/" menjadi "index.html".
+3. Pengunjung domain utama akan langsung dialihkan ke subfolder secara instan!
+
+PILIHAN B (Tanpa Redirect URL - Pakai index_bridge.php):
+1. Salin berkas "index_bridge.php" dari subfolder ke folder root "public_html/".
+2. Ubah namanya menjadi "index.php" di "public_html/".
+3. Website akan tampil langsung di domain utama seolah-olah ditaruh di root!
+
+PILIHAN C (Pengaturan Domain cPanel):
+1. Di cPanel, buka menu "Domains".
+2. Ubah "Document Root" domain utama Anda dari "public_html" menjadi
+   "public_html/web" (atau nama folder Anda). Klik Update.
 
 ================================================================================
-Semoga panduan ini membantu kelancaran hosting website Ust. Jaenal Maskun, S.Pd.I.
+Semoga panduan ini membantu kelancaran dakwah & karya Ust. Jaenal Maskun, S.Pd.I.
 ================================================================================
 `;
 }

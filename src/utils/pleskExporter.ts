@@ -181,7 +181,8 @@ DirectoryIndex index.php index.html
 
 <IfModule mod_rewrite.c>
     RewriteEngine On
-    RewriteBase /
+    # RewriteBase dinamis - otomatis menyesuaikan bila ditaruh di root public_html ataupun subfolder
+    # RewriteBase /
 
     # Cegah akses langsung ke file sensitif
     RewriteRule ^(db_config\\.php|db_config\\.local\\.php|database\\.sql|\\.git|\\.env|package\\.json|server\\.ts) - [F,L,NC]
@@ -317,6 +318,12 @@ $baseUrl = $protocol . $host;
 $reqUri = $_SERVER['REQUEST_URI'] ?? '/';
 $canonicalUrl = $baseUrl . $reqUri;
 
+$scriptDir = rtrim(dirname($_SERVER['SCRIPT_NAME'] ?? ''), '/\\');
+if ($scriptDir === '\\' || $scriptDir === '.' || $scriptDir === '/') {
+    $scriptDir = '';
+}
+$baseAppUrl = $baseUrl . $scriptDir;
+
 $title = htmlspecialchars($share['title'] ?? ($profile['title'] ?? 'Ust. Jaenal Maskun, S.Pd.I. | Pendidik, Akademisi & Penggerak Madrasah'), ENT_QUOTES, 'UTF-8');
 $desc = htmlspecialchars($share['description'] ?? ($profile['tagline'] ?? $profile['bio'] ?? 'Website Resmi Ust. Jaenal Maskun, S.Pd.I. - Menyemai Adab, Menumbuhkan Intelektual, Mengabdi untuk Kemuliaan Umat.'), ENT_QUOTES, 'UTF-8');
 
@@ -327,15 +334,15 @@ if (!preg_match('/^https?:\\/\\//i', $avatar)) {
     $cleanPath = ltrim(parse_url($avatar, PHP_URL_PATH), '/');
     if (!empty($cleanPath) && file_exists(__DIR__ . '/' . $cleanPath)) {
         $imgVersion = filemtime(__DIR__ . '/' . $cleanPath);
-        $avatarUrl = $baseUrl . '/' . $cleanPath . '?v=' . $imgVersion;
+        $avatarUrl = $baseAppUrl . '/' . $cleanPath . '?v=' . $imgVersion;
     } elseif (file_exists(__DIR__ . '/og-image.jpg')) {
         $imgVersion = filemtime(__DIR__ . '/og-image.jpg');
-        $avatarUrl = $baseUrl . '/og-image.jpg?v=' . $imgVersion;
+        $avatarUrl = $baseAppUrl . '/og-image.jpg?v=' . $imgVersion;
     } elseif (file_exists(__DIR__ . '/thumbnail.jpg')) {
         $imgVersion = filemtime(__DIR__ . '/thumbnail.jpg');
-        $avatarUrl = $baseUrl . '/thumbnail.jpg?v=' . $imgVersion;
+        $avatarUrl = $baseAppUrl . '/thumbnail.jpg?v=' . $imgVersion;
     } else {
-        $avatarUrl = $baseUrl . '/' . ($cleanPath ?: 'og-image.jpg') . '?v=' . $imgVersion;
+        $avatarUrl = $baseAppUrl . '/' . ($cleanPath ?: 'og-image.jpg') . '?v=' . $imgVersion;
     }
 } else {
     $avatarUrl = $avatar . (strpos($avatar, '?') !== false ? '&v=' . $imgVersion : '?v=' . $imgVersion);
@@ -384,6 +391,19 @@ if (file_exists($htmlFile)) {
                     $html = $inlineScript . $html;
                 }
             }
+        }
+        
+        // Otomatis sesuaikan path assets, icon & upload jika ditaruh di folder dalam public_html
+        if (!empty($scriptDir)) {
+            $html = preg_replace('/href="\\/assets\\//i', 'href="' . $scriptDir . '/assets/', $html);
+            $html = preg_replace('/src="\\/assets\\//i', 'src="' . $scriptDir . '/assets/', $html);
+            $html = preg_replace('/href="\\/favicon/i', 'href="' . $scriptDir . '/favicon', $html);
+            $html = preg_replace('/href="\\/apple-touch-icon/i', 'href="' . $scriptDir . '/apple-touch-icon', $html);
+            $html = preg_replace('/href="\\/avatar-jaenal/i', 'href="' . $scriptDir . '/avatar-jaenal', $html);
+            $html = preg_replace('/src="\\/avatar-jaenal/i', 'src="' . $scriptDir . '/avatar-jaenal', $html);
+            $html = preg_replace('/src="\\/og-image/i', 'src="' . $scriptDir . '/og-image', $html);
+            $html = str_replace('"/uploads/', '"' . $scriptDir . '/uploads/', $html);
+            $html = str_replace('\'/uploads/', '\'' . $scriptDir . '/uploads/', $html);
         }
         
         @header('Content-Type: text/html; charset=utf-8');

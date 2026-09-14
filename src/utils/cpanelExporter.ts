@@ -346,12 +346,154 @@ export const downloadCpanelPackageZip = async (
 </body>
 </html>`);
   zip.file('redirect.html', zip.file('bridge.html') ? '' : '');
+  zip.file('symlink_maker.php', `<?php
+/**
+ * Utilitas Pembuat Tautan Simbolik (Symlink) cPanel
+ * Web Personal Ust. Jaenal Maskun, S.Pd.I.
+ */
+@ini_set('display_errors', '1');
+error_reporting(E_ALL);
+$docRoot = $_SERVER['DOCUMENT_ROOT'] ?? __DIR__;
+$msg = '';
+$status = '';
+if ($_SERVER['REQUEST_METHOD'] === 'POST') {
+    $target = trim($_POST['target_folder'] ?? '');
+    $link = trim($_POST['link_name'] ?? 'web');
+    if (empty($target)) {
+        $msg = 'Harap masukkan path target folder.';
+        $status = 'error';
+    } else {
+        $linkPath = rtrim($docRoot, '/') . '/' . ltrim($link, '/');
+        if (file_exists($linkPath) || is_link($linkPath)) {
+            $msg = "Tautan simbolik atau folder '$link' sudah ada.";
+            $status = 'error';
+        } else {
+            if (@symlink($target, $linkPath)) {
+                $msg = "Berhasil membuat tautan simbolik dari '$target' ke '$linkPath'.";
+                $status = 'success';
+            } else {
+                $msg = "Gagal membuat symlink. Kemungkinan fungsi symlink dinonaktifkan hosting.";
+                $status = 'error';
+            }
+        }
+    }
+}
+?>
+<!DOCTYPE html>
+<html lang="id">
+<head>
+  <meta charset="UTF-8">
+  <title>Symlink Maker cPanel - Web Ust. Jaenal Maskun</title>
+  <style>
+    body { font-family: system-ui, sans-serif; background: #064e3b; color: #fff; display: flex; align-items: center; justify-content: center; min-height: 100vh; margin: 0; }
+    .card { background: rgba(255,255,255,0.08); border: 1px solid rgba(251,191,36,0.3); border-radius: 20px; padding: 32px; max-width: 500px; width: 90%; }
+    h1 { font-size: 1.25rem; color: #fde68a; margin-top: 0; }
+    input[type=text] { width: 100%; padding: 10px; border-radius: 8px; border: 1px solid #ccc; margin-top: 6px; box-sizing: border-box; }
+    button { margin-top: 16px; padding: 12px 24px; background: #f59e0b; color: #022c22; font-weight: bold; border: none; border-radius: 12px; cursor: pointer; }
+    .msg { margin-top: 16px; padding: 12px; border-radius: 8px; font-size: 0.9rem; }
+    .success { background: #065f46; color: #a7f3d0; }
+    .error { background: #991b1b; color: #fecaca; }
+  </style>
+</head>
+<body>
+  <div class="card">
+    <h1>Pembuat Tautan Simbolik (cPanel)</h1>
+    <?php if ($msg): ?><div class="msg <?= $status ?>"><?= htmlspecialchars($msg) ?></div><?php endif; ?>
+    <form method="POST">
+      <label>Path Target Folder:</label>
+      <input type="text" name="target_folder" placeholder="/home/username/folder_anda" required>
+      <label style="margin-top:12px;display:block;">Nama Tautan (di public_html):</label>
+      <input type="text" name="link_name" value="web" required>
+      <button type="submit">Buat Tautan Simbolik</button>
+    </form>
+  </div>
+</body>
+</html>`);
+  zip.file('index_bridge.php', `<?php
+/**
+ * Jembatan Akses Web (Bridge Wrapper) cPanel
+ * Web Personal Ust. Jaenal Maskun, S.Pd.I.
+ */
+@ini_set('display_errors', '0');
+error_reporting(0);
+$targetFolder = 'web';
+$targetPath = __DIR__ . '/' . $targetFolder;
+if (file_exists($targetPath . '/index.php')) {
+    chdir($targetPath);
+    require $targetPath . '/index.php';
+    exit;
+} elseif (file_exists($targetPath . '/index.html')) {
+    header('Location: ./' . $targetFolder . '/');
+    exit;
+} else {
+    echo "Folder website '$targetFolder' belum ditemukan. Pastikan Anda telah mengekstrak ZIP ke dalam subfolder 'public_html/$targetFolder/'.";
+}
+`);
   zip.file('README_CPANEL.md', generateCpanelReadme());
   zip.file('PANDUAN_HOSTING_CPANEL.txt', generateCpanelReadme());
-  zip.file('PANDUAN_AKSES_FOLDER_LUAR_PUBLIC_HTML.txt', `PANDUAN AKSES FOLDER SELAIN PUBLIC_HTML (cPanel):
-1. Subdomain / Addon Domain Document Root: Arahkan langsung Document Root subdomain Anda ke folder tersebut di cPanel.
-2. File Jembatan (bridge.html): Letakkan berkas bridge.html sebagai public_html/index.html untuk redirect instan.
-3. Tautan Simbolik: Gunakan symlink di cPanel untuk menghubungkan public_html ke folder luar.`);
+  zip.file('PANDUAN_AKSES_FOLDER_LUAR_PUBLIC_HTML.txt', `================================================================================
+PANDUAN MENJALANKAN WEBSITE DI DALAM SUBFOLDER PUBLIC_HTML (cPanel)
+Web Personal Ust. Jaenal Maskun, S.Pd.I.
+================================================================================
+
+Apakah website bisa langsung aktif jika ditaruh di dalam folder buatan Anda
+di dalam public_html (misal: public_html/web/ atau public_html/profil/)?
+
+JAWABANNYA: YA, 100% BISA & LANGSUNG AKTIF OTOMATIS!
+
+Website ini telah dirancang khusus dengan sistem "Self-Adaptive Subfolder Engine":
+- Skrip CSS & JavaScript menggunakan relative base path (./assets/...)
+- Panggilan API (/api/...) dan gambar (/uploads/...) otomatis disesuaikan
+  ke nama subfolder apa pun yang Anda gunakan secara dinamis.
+- Database MySQL & file JSON diatur menggunakan path server lokal (__DIR__).
+
+--------------------------------------------------------------------------------
+LANGKAH 1: EKSTRAK ZIP KE SUBFOLDER PILIHAN ANDA
+--------------------------------------------------------------------------------
+1. Masuk ke cPanel > File Manager.
+2. Buka folder "public_html".
+3. Buat folder baru sesuai keinginan Anda, contoh:
+   - "web"       -> lokasi: public_html/web/
+   - "profil"    -> lokasi: public_html/profil/
+   - "ustadz"    -> lokasi: public_html/ustadz/
+4. Upload file ZIP ini ke dalam folder tersebut, lalu klik kanan > "Extract".
+5. Pastikan semua berkas (.htaccess, index.php, index.html, folder api, dll)
+   berada langsung di dalam folder tersebut (bukan tersarang di subfolder ganda).
+
+--------------------------------------------------------------------------------
+LANGKAH 2: CARA AKSES WEBSITE ANDA
+--------------------------------------------------------------------------------
+Website Anda LANGSUNG AKTIF dan bisa dibuka di browser:
+👉 https://domainanda.com/nama-folder/
+(Contoh: https://domainanda.com/web/ atau https://domainanda.com/profil/)
+
+Semua fitur (halaman utama, tasbih digital, modul madrasah, form pesan, galeri,
+hingga admin portal) langsung bekerja penuh!
+
+--------------------------------------------------------------------------------
+LANGKAH 3 (OPSIONAL): INGIN DOMAIN UTAMA OTOMATIS MEMBUKA SUBFOLDER TERSEBUT?
+--------------------------------------------------------------------------------
+Jika Anda ingin saat seseorang membuka https://domainanda.com (tanpa mengetik nama
+folder) langsung otomatis menampilkan website di dalam subfolder:
+
+PILIHAN A (Paling Mudah - Pakai bridge.html):
+1. Salin berkas "bridge.html" dari subfolder ke folder root "public_html/".
+2. Ubah nama berkasnya di "public_html/" menjadi "index.html".
+3. Pengunjung domain utama akan langsung dialihkan ke subfolder secara instan!
+
+PILIHAN B (Tanpa Redirect URL - Pakai index_bridge.php):
+1. Salin berkas "index_bridge.php" dari subfolder ke folder root "public_html/".
+2. Ubah namanya menjadi "index.php" di "public_html/".
+3. Website akan tampil langsung di domain utama seolah-olah ditaruh di root!
+
+PILIHAN C (Pengaturan Domain cPanel):
+1. Di cPanel, buka menu "Domains".
+2. Ubah "Document Root" domain utama Anda dari "public_html" menjadi
+   "public_html/web" (atau nama folder Anda). Klik Update.
+
+================================================================================
+Semoga panduan ini membantu kelancaran dakwah & karya Ust. Jaenal Maskun, S.Pd.I.
+================================================================================`);
 
   // 2. Folder api/
   const apiFolder = zip.folder('api');
