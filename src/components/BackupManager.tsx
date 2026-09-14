@@ -32,7 +32,8 @@ import {
   Image as ImageIcon,
   FolderUp,
   Camera,
-  Smartphone
+  Smartphone,
+  ExternalLink
 } from 'lucide-react';
 import { BackupSnapshot, BackupStats, FullBackupBundle, SiteContentConfig, HeaderLogoConfig, StickyFooterConfig } from '../types';
 import { downloadPleskPackageZip, triggerZipDownload } from '../utils/pleskExporter';
@@ -334,40 +335,66 @@ export const BackupManager: React.FC<BackupManagerProps> = ({
       try {
         const zip = await JSZip.loadAsync(file);
         
-        // Find JSON data inside the ZIP
+        // Find JSON data inside the ZIP with path normalization
         let jsonContentStr: string | null = null;
         let jsonFoundPath = '';
         
-        const candidatePaths = [
-          'data/persisted_site_data.json',
+        const prioritizedJsonFilenames = [
           'persisted_site_data.json',
-          'data/site_data.default.json',
           'site_data.default.json',
-          'data/site_data.json',
           'site_data.json',
+          'site_content.json',
           'backup.json',
-          'data/backup_data.json'
+          'backup_data.json'
         ];
         
-        for (const p of candidatePaths) {
-          const entry = zip.file(p);
-          if (entry) {
-            jsonContentStr = await entry.async('string');
-            jsonFoundPath = p;
-            break;
+        // Pass A: Check prioritized standard filenames first
+        for (const [rawPath, zipEntry] of Object.entries(zip.files)) {
+          if (zipEntry.dir) continue;
+          const normalized = rawPath.replace(/\\/g, '/');
+          if (normalized.includes('__MACOSX') || normalized.startsWith('.')) continue;
+
+          const baseName = normalized.split('/').pop()?.toLowerCase();
+          if (baseName && prioritizedJsonFilenames.includes(baseName)) {
+            try {
+              const testStr = await zipEntry.async('string');
+              const testObj = JSON.parse(testStr);
+              if (testObj && (testObj.siteContent || testObj.data?.siteContent || testObj.backup || testObj.profile || testObj.logoConfig || testObj.stickyFooterConfig)) {
+                jsonContentStr = testStr;
+                jsonFoundPath = normalized;
+                break;
+              }
+            } catch (e) {}
           }
         }
         
-        // Search all entries for any .json file with valid structure
+        // Pass B: Search all entries for any .json file with valid structure
         if (!jsonContentStr) {
-          for (const [relativePath, zipEntry] of Object.entries(zip.files)) {
-            if (!zipEntry.dir && relativePath.endsWith('.json')) {
+          for (const [rawPath, zipEntry] of Object.entries(zip.files)) {
+            if (zipEntry.dir) continue;
+            const normalized = rawPath.replace(/\\/g, '/');
+            if (normalized.includes('__MACOSX') || normalized.startsWith('.')) continue;
+
+            if (normalized.endsWith('.json')) {
               try {
                 const testStr = await zipEntry.async('string');
                 const testObj = JSON.parse(testStr);
-                if (testObj?.siteContent || testObj?.data?.siteContent || testObj?.profile || testObj?.logoConfig || testObj?.stickyFooterConfig) {
+                const hasData = !!(
+                  testObj?.siteContent ||
+                  testObj?.data?.siteContent ||
+                  testObj?.backup?.data?.siteContent ||
+                  testObj?.backup?.siteContent ||
+                  testObj?.backup?.data ||
+                  testObj?.profile ||
+                  testObj?.data?.profile ||
+                  testObj?.logoConfig ||
+                  testObj?.stickyFooterConfig ||
+                  testObj?.setting_key === 'site_data' ||
+                  (Array.isArray(testObj) && testObj.some((r: any) => r?.setting_key === 'site_data' || r?.key === 'site_data'))
+                );
+                if (hasData) {
                   jsonContentStr = testStr;
-                  jsonFoundPath = relativePath;
+                  jsonFoundPath = normalized;
                   break;
                 }
               } catch (e) {}
@@ -375,15 +402,19 @@ export const BackupManager: React.FC<BackupManagerProps> = ({
           }
         }
 
-        // Search for database.sql inside the ZIP
+        // Pass C: Search for database.sql inside the ZIP
         if (!jsonContentStr) {
-          for (const [relativePath, zipEntry] of Object.entries(zip.files)) {
-            if (!zipEntry.dir && relativePath.endsWith('.sql')) {
+          for (const [rawPath, zipEntry] of Object.entries(zip.files)) {
+            if (zipEntry.dir) continue;
+            const normalized = rawPath.replace(/\\/g, '/');
+            if (normalized.includes('__MACOSX') || normalized.startsWith('.')) continue;
+
+            if (normalized.endsWith('.sql')) {
               const sqlStr = await zipEntry.async('string');
               const extracted = extractSiteDataFromSql(sqlStr);
               if (extracted) {
                 jsonContentStr = JSON.stringify(extracted);
-                jsonFoundPath = relativePath;
+                jsonFoundPath = normalized;
                 break;
               }
             }
@@ -400,9 +431,13 @@ export const BackupManager: React.FC<BackupManagerProps> = ({
         // Extract media files in uploads/ into Base64 map
         const zipMediaMap: Record<string, string> = {};
         let mediaFilesCount = 0;
-        for (const [path, entry] of Object.entries(zip.files)) {
-          if (!entry.dir && (path.startsWith('uploads/') || path.startsWith('data/uploads/') || path.includes('/uploads/'))) {
-            const fileName = path.split('/').pop() || '';
+        for (const [rawPath, entry] of Object.entries(zip.files)) {
+          if (entry.dir) continue;
+          const normalized = rawPath.replace(/\\/g, '/');
+          if (normalized.includes('__MACOSX') || normalized.startsWith('.')) continue;
+
+          if (normalized.includes('uploads/') || normalized.includes('assets/uploads/')) {
+            const fileName = normalized.split('/').pop() || '';
             if (fileName && !fileName.startsWith('.')) {
               mediaFilesCount++;
               try {
@@ -425,24 +460,21 @@ export const BackupManager: React.FC<BackupManagerProps> = ({
           }
         }
 
-        let dataContent = parsed.data?.siteContent || parsed.siteContent || (parsed.profile ? parsed : null);
+        const zipRoot = parsed.backup ? (parsed.backup.data || parsed.backup) : parsed;
+        let dataContent = zipRoot.data?.siteContent || zipRoot.siteContent || (zipRoot.profile ? zipRoot : null);
+        let logoContent = zipRoot.data?.logoConfig || zipRoot.logoConfig || parsed.logoConfig;
+        let footerContent = zipRoot.data?.stickyFooterConfig || zipRoot.stickyFooterConfig || parsed.stickyFooterConfig;
 
         // If ZIP has media files, resolve relative URLs to Base64 data URLs for seamless offline/Android display
         if (Object.keys(zipMediaMap).length > 0) {
           if (dataContent) {
             dataContent = deepResolveMediaUrls(dataContent, zipMediaMap);
           }
-          if (parsed.logoConfig) {
-            parsed.logoConfig = deepResolveMediaUrls(parsed.logoConfig, zipMediaMap);
+          if (logoContent) {
+            logoContent = deepResolveMediaUrls(logoContent, zipMediaMap);
           }
-          if (parsed.data?.logoConfig) {
-            parsed.data.logoConfig = deepResolveMediaUrls(parsed.data.logoConfig, zipMediaMap);
-          }
-          if (parsed.stickyFooterConfig) {
-            parsed.stickyFooterConfig = deepResolveMediaUrls(parsed.stickyFooterConfig, zipMediaMap);
-          }
-          if (parsed.data?.stickyFooterConfig) {
-            parsed.data.stickyFooterConfig = deepResolveMediaUrls(parsed.data.stickyFooterConfig, zipMediaMap);
+          if (footerContent) {
+            footerContent = deepResolveMediaUrls(footerContent, zipMediaMap);
           }
         }
 
@@ -457,7 +489,7 @@ export const BackupManager: React.FC<BackupManagerProps> = ({
           publicationsCount: Array.isArray(content.publications) ? content.publications.length : 0,
           agendasCount: Array.isArray(content.agenda) ? content.agenda.length : 0,
           galleryCount: Array.isArray(content.gallery) ? content.gallery.length : 0,
-          messagesCount: Array.isArray(parsed.messages) ? parsed.messages.length : 0,
+          messagesCount: Array.isArray(parsed.messages || zipRoot.messages) ? (parsed.messages || zipRoot.messages).length : 0,
           pillarsCount: Array.isArray(content.pillars) ? content.pillars.length : 0,
           quotesCount: Array.isArray(content.quotes) ? content.quotes.length : 0,
           educationCount: Array.isArray(content.education) ? content.education.length : 0,
@@ -469,10 +501,14 @@ export const BackupManager: React.FC<BackupManagerProps> = ({
         setParsedRestoreData({
           ...parsed,
           data: {
-            ...parsed.data,
-            siteContent: dataContent
+            ...(zipRoot.data || zipRoot),
+            siteContent: dataContent,
+            logoConfig: logoContent,
+            stickyFooterConfig: footerContent
           },
           siteContent: dataContent,
+          logoConfig: logoContent,
+          stickyFooterConfig: footerContent,
           _fileType: 'zip',
           _mediaFilesCount: mediaFilesCount,
           _zipSourceFile: file
@@ -729,24 +765,35 @@ export const BackupManager: React.FC<BackupManagerProps> = ({
 
         try {
           const controller = new AbortController();
-          const timer = setTimeout(() => controller.abort(), 60000);
+          const timer = setTimeout(() => controller.abort(), 90000);
           const res = await fetch('/api/backup/restore-zip', {
             method: 'POST',
             body: formData,
             signal: controller.signal
           });
           clearTimeout(timer);
-          if (res.ok) {
-            const text = await res.text();
-            try {
-              const jsonRes = JSON.parse(text);
-              if (jsonRes.success) {
-                resultData = jsonRes;
-              }
-            } catch (e) {}
+          const text = await res.text();
+          let jsonRes: any = null;
+          try {
+            jsonRes = JSON.parse(text);
+          } catch (e) {}
+
+          if (res.ok && jsonRes?.success) {
+            resultData = jsonRes;
+          } else if (jsonRes?.error) {
+            setRestoreError(`Gagal memulihkan ZIP di server: ${jsonRes.error}`);
+            setIsRestoring(false);
+            return;
+          } else if (!res.ok) {
+            setRestoreError(`Server mengembalikan galat HTTP ${res.status} saat pemulihan ZIP.`);
+            setIsRestoring(false);
+            return;
           }
-        } catch (zipErr) {
+        } catch (zipErr: any) {
           console.warn('Server zip restore notice:', zipErr);
+          setRestoreError(`Koneksi terputus saat memulihkan ZIP: ${zipErr?.message || 'Waktu habis'}`);
+          setIsRestoring(false);
+          return;
         }
       }
 
@@ -772,20 +819,36 @@ export const BackupManager: React.FC<BackupManagerProps> = ({
           });
           clearTimeout(timer);
 
-          if (res.ok) {
-            const text = await res.text();
-            try {
-              resultData = JSON.parse(text);
-            } catch (parseErr) {
-              resultData = {
-                success: true,
-                message: 'Data berhasil dipulihkan dan diselaraskan ke browser!',
-                restoredData: payloadToRestore.data || payloadToRestore
-              };
-            }
+          const text = await res.text();
+          let jsonRes: any = null;
+          try {
+            jsonRes = JSON.parse(text);
+          } catch (parseErr) {}
+
+          if (res.ok && jsonRes?.success) {
+            resultData = jsonRes;
+          } else if (jsonRes?.error) {
+            setRestoreError(`Server gagal memulihkan data: ${jsonRes.error}`);
+            setIsRestoring(false);
+            return;
+          } else if (!res.ok) {
+            setRestoreError(`Server mengembalikan status HTTP ${res.status} saat memulihkan berkas.`);
+            setIsRestoring(false);
+            return;
+          } else {
+            resultData = {
+              success: true,
+              message: 'Data berhasil dipulihkan dan diselaraskan ke browser!',
+              restoredData: payloadToRestore.data || payloadToRestore
+            };
           }
-        } catch (netErr) {
+        } catch (netErr: any) {
           console.warn('Network notice during restore:', netErr);
+          resultData = {
+            success: true,
+            message: 'Data berhasil dipulihkan di penyimpanan browser!',
+            restoredData: payloadToRestore.data || payloadToRestore
+          };
         }
       }
 
@@ -1056,31 +1119,38 @@ export const BackupManager: React.FC<BackupManagerProps> = ({
   // Handler: Download Full ZIP Backup (Instant, Self-Contained with Embedded Photos & Uploads Folder)
   const handleDownloadZipBackup = async () => {
     setIsDownloadingZip(true);
-    setBackupStatusText('Menyiapkan paket ZIP lengkap...');
+    setBackupStatusText('Mengunduh paket arsip ZIP komplit dari server...');
     const dateStr = new Date().toISOString().slice(0, 10);
     const backupFileName = `backup-data-komplit-jaenalmaskun-${dateStr}.zip`;
 
-    // 1. Prioritas Utama: Unduh langsung via Server API (/api/backup/zip-data)
-    // Mengalirkan berkas langsung dari server, membackup 100% file tanpa ada yang tertinggal
+    // 1. Prioritas Utama: Unduh via Server API (/api/backup/zip-data) dengan fetch Blob
     try {
-      const directUrl = `/api/backup/zip-data?_t=${Date.now()}`;
-      const link = document.createElement('a');
-      link.href = directUrl;
-      link.download = backupFileName;
-      document.body.appendChild(link);
-      link.click();
-      document.body.removeChild(link);
-      setRestoreSuccessMsg('Paket cadangan komplit 100% sedang diunduh! Seluruh file website, database, logo, galeri foto, video & dokumen tersimpan lengkap.');
-      setIsDownloadingZip(false);
-      setBackupStatusText(null);
-      return;
+      const controller = new AbortController();
+      const timer = setTimeout(() => controller.abort(), 45000);
+      const res = await fetch(`/api/backup/zip-data?_t=${Date.now()}`, {
+        signal: controller.signal
+      });
+      clearTimeout(timer);
+
+      if (res.ok) {
+        setBackupStatusText('Menyimpan berkas ZIP ke perangkat...');
+        const blob = await res.blob();
+        if (blob && blob.size > 200) {
+          downloadBlobSafely(blob, backupFileName);
+          setRestoreSuccessMsg('Paket cadangan komplit 100% berhasil diunduh! Seluruh file website, database, logo, galeri foto, video & dokumen tersimpan lengkap.');
+          setIsDownloadingZip(false);
+          setBackupStatusText(null);
+          return;
+        }
+      }
+      throw new Error(`Server respon: ${res.status}`);
     } catch (serverErr) {
-      console.warn('Direct server ZIP download failed, falling back to local export', serverErr);
+      console.warn('Direct server ZIP download stream notice, falling back to local JSZip packaging:', serverErr);
     }
 
     // 2. Fallback aman client-side jika server offline / unreachable
     try {
-      setBackupStatusText('Mengemas data website...');
+      setBackupStatusText('Mengemas cadangan data lokal (JSZip)...');
       let contentToBackup = siteContent;
       let logoToBackup = logoConfig;
       let footerToBackup = stickyFooterConfig;
@@ -1523,15 +1593,29 @@ export const BackupManager: React.FC<BackupManagerProps> = ({
                 </div>
               </div>
 
-              <button
-                type="button"
-                onClick={handleDownloadZipBackup}
-                disabled={isDownloadingZip}
-                className="w-full py-3 px-4 rounded-xl bg-gradient-to-r from-amber-500 to-amber-600 hover:from-amber-400 hover:to-amber-500 text-emerald-950 text-xs font-extrabold flex items-center justify-center gap-2 shadow-md transition-all active:scale-98 disabled:opacity-60 cursor-pointer"
-              >
-                <Archive className={`w-4 h-4 ${isDownloadingZip ? 'animate-spin' : ''}`} />
-                <span>{isDownloadingZip ? 'Mengemas & Mengunduh ZIP...' : 'Unduh Paket Arsip ZIP'}</span>
-              </button>
+              <div className="space-y-2">
+                <button
+                  type="button"
+                  onClick={handleDownloadZipBackup}
+                  disabled={isDownloadingZip}
+                  className="w-full py-3 px-4 rounded-xl bg-gradient-to-r from-amber-500 to-amber-600 hover:from-amber-400 hover:to-amber-500 text-emerald-950 text-xs font-extrabold flex items-center justify-center gap-2 shadow-md transition-all active:scale-98 disabled:opacity-60 cursor-pointer"
+                >
+                  <Archive className={`w-4 h-4 ${isDownloadingZip ? 'animate-spin' : ''}`} />
+                  <span>{isDownloadingZip ? 'Mengemas & Mengunduh ZIP...' : 'Unduh Paket Arsip ZIP'}</span>
+                </button>
+                <div className="text-center">
+                  <a
+                    href="/api/backup/zip-data"
+                    download
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="inline-flex items-center gap-1 text-[11px] font-semibold text-emerald-800 hover:text-emerald-950 underline hover:no-underline"
+                  >
+                    <span>Atau unduh langsung via server</span>
+                    <ExternalLink className="w-3 h-3" />
+                  </a>
+                </div>
+              </div>
             </div>
 
             {/* Card 3: Instant Snapshot */}

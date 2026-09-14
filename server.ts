@@ -3913,26 +3913,40 @@ app.post('/api/backup/restore', async (req, res) => {
       }
     }
 
-    // Identify nested structure, snapshot format, or flat structure
-    let incomingData = payload.data ? payload.data : payload;
-    let siteContent = incomingData.siteContent || payload.siteContent;
-    let logoConfig = incomingData.logoConfig || payload.logoConfig;
-    let stickyFooterConfig = incomingData.stickyFooterConfig || payload.stickyFooterConfig;
+    // Identify nested structure, backup envelope format, snapshot format, or flat structure
+    let root = payload.backup ? (payload.backup.data || payload.backup) : payload;
+    let incomingData = root.data ? root.data : root;
+    let siteContent = incomingData.siteContent || root.siteContent || payload.siteContent;
+    let logoConfig = incomingData.logoConfig || root.logoConfig || payload.logoConfig;
+    let stickyFooterConfig = incomingData.stickyFooterConfig || root.stickyFooterConfig || payload.stickyFooterConfig;
+
+    // Check if site_data is string or object inside root or incomingData
+    if (!siteContent && (incomingData.site_data || root.site_data || payload.site_data)) {
+      try {
+        const raw = incomingData.site_data || root.site_data || payload.site_data;
+        const parsed = typeof raw === 'string' ? JSON.parse(raw) : raw;
+        if (parsed?.siteContent || parsed?.profile) {
+          siteContent = parsed.siteContent || parsed;
+          if (!logoConfig) logoConfig = parsed.logoConfig;
+          if (!stickyFooterConfig) stickyFooterConfig = parsed.stickyFooterConfig;
+        }
+      } catch (e) {}
+    }
 
     // Fallback: If root contains direct profile or sections
-    if (!siteContent && (payload.profile || payload.publications || payload.agenda || payload.pillars || incomingData?.profile)) {
+    if (!siteContent && (payload.profile || payload.publications || payload.agenda || payload.pillars || incomingData?.profile || root?.profile)) {
       siteContent = {
-        profile: incomingData?.profile || payload.profile || defaultInitialSiteData.siteContent.profile,
-        education: incomingData?.education || payload.education || [],
-        pillars: incomingData?.pillars || payload.pillars || [],
-        quotes: incomingData?.quotes || payload.quotes || [],
-        publications: incomingData?.publications || payload.publications || [],
-        experience: incomingData?.experience || payload.experience || payload.experiences || [],
-        agenda: incomingData?.agenda || payload.agenda || [],
-        gallery: incomingData?.gallery || payload.gallery || [],
-        visibility: incomingData?.visibility || payload.visibility || defaultInitialSiteData.siteContent.visibility,
-        heroSettings: incomingData?.heroSettings || payload.heroSettings || defaultInitialSiteData.siteContent.heroSettings,
-        shareSettings: incomingData?.shareSettings || payload.shareSettings || defaultInitialSiteData.siteContent.shareSettings
+        profile: incomingData?.profile || root?.profile || payload.profile || defaultInitialSiteData.siteContent.profile,
+        education: incomingData?.education || root?.education || payload.education || [],
+        pillars: incomingData?.pillars || root?.pillars || payload.pillars || [],
+        quotes: incomingData?.quotes || root?.quotes || payload.quotes || [],
+        publications: incomingData?.publications || root?.publications || payload.publications || [],
+        experience: incomingData?.experience || incomingData?.experiences || root?.experience || payload.experience || payload.experiences || [],
+        agenda: incomingData?.agenda || root?.agenda || payload.agenda || [],
+        gallery: incomingData?.gallery || root?.gallery || payload.gallery || [],
+        visibility: incomingData?.visibility || root?.visibility || payload.visibility || defaultInitialSiteData.siteContent.visibility,
+        heroSettings: incomingData?.heroSettings || root?.heroSettings || payload.heroSettings || defaultInitialSiteData.siteContent.heroSettings,
+        shareSettings: incomingData?.shareSettings || root?.shareSettings || payload.shareSettings || defaultInitialSiteData.siteContent.shareSettings
       };
     }
 
@@ -4032,33 +4046,60 @@ app.post('/api/backup/restore-zip', (backupZipMulter.single('backupZip') as any)
 
     const zip = await JSZip.loadAsync(file.buffer);
 
-    // 1. Locate JSON site data or SQL in zip
+    // 1. Locate JSON site data or SQL in zip with full path & Windows backslash normalization
     let jsonContentStr: string | null = null;
-    const candidatePaths = [
-      'data/persisted_site_data.json',
+    const prioritizedJsonFilenames = [
       'persisted_site_data.json',
-      'data/site_data.default.json',
       'site_data.default.json',
-      'data/site_data.json',
       'site_data.json',
-      'backup.json'
+      'backup.json',
+      'backup_data.json'
     ];
 
-    for (const p of candidatePaths) {
-      const entry = zip.file(p);
-      if (entry) {
-        jsonContentStr = await entry.async('string');
-        break;
+    // Pass A: Check prioritized standard filenames first
+    for (const [rawRelPath, zipEntry] of Object.entries(zip.files)) {
+      if (zipEntry.dir) continue;
+      const normalizedPath = rawRelPath.replace(/\\/g, '/');
+      if (normalizedPath.includes('__MACOSX') || normalizedPath.startsWith('.')) continue;
+
+      const baseName = normalizedPath.split('/').pop()?.toLowerCase();
+      if (baseName && prioritizedJsonFilenames.includes(baseName)) {
+        try {
+          const testStr = await zipEntry.async('string');
+          const testObj = JSON.parse(testStr);
+          if (testObj && (testObj.siteContent || testObj.data?.siteContent || testObj.backup || testObj.profile || testObj.logoConfig || testObj.stickyFooterConfig)) {
+            jsonContentStr = testStr;
+            break;
+          }
+        } catch (e) {}
       }
     }
 
+    // Pass B: Check any .json file inside the archive
     if (!jsonContentStr) {
-      for (const [relativePath, zipEntry] of Object.entries(zip.files)) {
-        if (!zipEntry.dir && relativePath.endsWith('.json')) {
+      for (const [rawRelPath, zipEntry] of Object.entries(zip.files)) {
+        if (zipEntry.dir) continue;
+        const normalizedPath = rawRelPath.replace(/\\/g, '/');
+        if (normalizedPath.includes('__MACOSX') || normalizedPath.startsWith('.')) continue;
+
+        if (normalizedPath.endsWith('.json')) {
           try {
             const testStr = await zipEntry.async('string');
             const testObj = JSON.parse(testStr);
-            if (testObj?.siteContent || testObj?.data?.siteContent || testObj?.profile) {
+            const hasData = !!(
+              testObj?.siteContent ||
+              testObj?.data?.siteContent ||
+              testObj?.backup?.data?.siteContent ||
+              testObj?.backup?.siteContent ||
+              testObj?.backup?.data ||
+              testObj?.profile ||
+              testObj?.data?.profile ||
+              testObj?.logoConfig ||
+              testObj?.stickyFooterConfig ||
+              testObj?.setting_key === 'site_data' ||
+              (Array.isArray(testObj) && testObj.some((r: any) => r?.setting_key === 'site_data' || r?.key === 'site_data'))
+            );
+            if (hasData) {
               jsonContentStr = testStr;
               break;
             }
@@ -4067,15 +4108,22 @@ app.post('/api/backup/restore-zip', (backupZipMulter.single('backupZip') as any)
       }
     }
 
+    // Pass C: Check any .sql file inside the archive
     if (!jsonContentStr) {
-      for (const [relativePath, zipEntry] of Object.entries(zip.files)) {
-        if (!zipEntry.dir && relativePath.endsWith('.sql')) {
-          const sqlStr = await zipEntry.async('string');
-          const extracted = parseSiteDataFromSql(sqlStr);
-          if (extracted) {
-            jsonContentStr = JSON.stringify(extracted);
-            break;
-          }
+      for (const [rawRelPath, zipEntry] of Object.entries(zip.files)) {
+        if (zipEntry.dir) continue;
+        const normalizedPath = rawRelPath.replace(/\\/g, '/');
+        if (normalizedPath.includes('__MACOSX') || normalizedPath.startsWith('.')) continue;
+
+        if (normalizedPath.endsWith('.sql')) {
+          try {
+            const sqlStr = await zipEntry.async('string');
+            const extracted = parseSiteDataFromSql(sqlStr);
+            if (extracted) {
+              jsonContentStr = JSON.stringify(extracted);
+              break;
+            }
+          } catch (e) {}
         }
       }
     }
@@ -4087,26 +4135,58 @@ app.post('/api/backup/restore-zip', (backupZipMulter.single('backupZip') as any)
       });
     }
 
-    const payload = JSON.parse(jsonContentStr);
+    let payload: any = {};
+    try {
+      payload = JSON.parse(jsonContentStr);
+    } catch (parseErr: any) {
+      return res.status(400).json({
+        success: false,
+        error: `Gagal membaca format JSON data cadangan: ${parseErr.message}`
+      });
+    }
 
-    // 2. Extract uploaded files from ZIP into data/uploads and public/assets/uploads
+    // 2. Extract uploaded files from ZIP into data/uploads and public/uploads
     let restoredFilesCount = 0;
     const uploadsDataDir = path.join(process.cwd(), 'data', 'uploads');
-    const uploadsPublicDir = path.join(process.cwd(), 'public', 'assets', 'uploads');
+    const uploadsPublicDir = path.join(process.cwd(), 'public', 'uploads');
+    const uploadsAssetsDir = path.join(process.cwd(), 'public', 'assets', 'uploads');
+    const uploadsDistDir = path.join(process.cwd(), 'dist', 'uploads');
+
     if (!fs.existsSync(uploadsDataDir)) fs.mkdirSync(uploadsDataDir, { recursive: true });
     if (!fs.existsSync(uploadsPublicDir)) fs.mkdirSync(uploadsPublicDir, { recursive: true });
+    if (!fs.existsSync(uploadsAssetsDir)) fs.mkdirSync(uploadsAssetsDir, { recursive: true });
+    if (fs.existsSync(path.join(process.cwd(), 'dist')) && !fs.existsSync(uploadsDistDir)) {
+      try { fs.mkdirSync(uploadsDistDir, { recursive: true }); } catch (e) {}
+    }
 
-    for (const [relPath, zipEntry] of Object.entries(zip.files)) {
-      if (!zipEntry.dir && (relPath.startsWith('uploads/') || relPath.startsWith('data/uploads/'))) {
-        const fileName = path.basename(relPath);
-        if (fileName && !fileName.startsWith('.')) {
+    for (const [rawRelPath, zipEntry] of Object.entries(zip.files)) {
+      if (zipEntry.dir) continue;
+      const normalizedPath = rawRelPath.replace(/\\/g, '/');
+      if (normalizedPath.includes('__MACOSX') || normalizedPath.startsWith('.')) continue;
+
+      const fileName = normalizedPath.split('/').pop();
+      if (!fileName || fileName.startsWith('.')) continue;
+
+      // Extract uploads media
+      if (normalizedPath.includes('uploads/')) {
+        try {
           const fileData = await zipEntry.async('nodebuffer');
           fs.writeFileSync(path.join(uploadsDataDir, fileName), fileData);
-          try {
-            fs.writeFileSync(path.join(uploadsPublicDir, fileName), fileData);
-          } catch (e) {}
+          try { fs.writeFileSync(path.join(uploadsPublicDir, fileName), fileData); } catch (e) {}
+          try { fs.writeFileSync(path.join(uploadsAssetsDir, fileName), fileData); } catch (e) {}
+          if (fs.existsSync(path.join(process.cwd(), 'dist'))) {
+            try { fs.writeFileSync(path.join(uploadsDistDir, fileName), fileData); } catch (e) {}
+          }
           restoredFilesCount++;
+        } catch (fileErr) {
+          console.warn('Notice extracting zip file:', fileName, fileErr);
         }
+      } else if (['favicon.ico', 'favicon.png', 'apple-touch-icon.png', 'og-image.jpg', 'thumbnail.jpg'].includes(fileName)) {
+        try {
+          const fileData = await zipEntry.async('nodebuffer');
+          fs.writeFileSync(path.join(DATA_DIR, fileName), fileData);
+          try { fs.writeFileSync(path.join(PUBLIC_DIR, fileName), fileData); } catch (e) {}
+        } catch (e) {}
       }
     }
 
@@ -4114,24 +4194,37 @@ app.post('/api/backup/restore-zip', (backupZipMulter.single('backupZip') as any)
     const safetySnapshot = createSnapshotHelper('restore', 'Snapshot Otomatis Sebelum Pemulihan Paket ZIP');
 
     // 4. Merge data
-    let incomingData = payload.data ? payload.data : payload;
-    let siteContent = incomingData.siteContent || payload.siteContent;
-    let logoConfig = incomingData.logoConfig || payload.logoConfig;
-    let stickyFooterConfig = incomingData.stickyFooterConfig || payload.stickyFooterConfig;
+    let root = payload.backup ? (payload.backup.data || payload.backup) : payload;
+    let incomingData = root.data ? root.data : root;
+    let siteContent = incomingData.siteContent || root.siteContent || payload.siteContent;
+    let logoConfig = incomingData.logoConfig || root.logoConfig || payload.logoConfig;
+    let stickyFooterConfig = incomingData.stickyFooterConfig || root.stickyFooterConfig || payload.stickyFooterConfig;
 
-    if (!siteContent && (payload.profile || payload.publications || payload.agenda || payload.pillars)) {
+    if (!siteContent && (incomingData.site_data || root.site_data || payload.site_data)) {
+      try {
+        const raw = incomingData.site_data || root.site_data || payload.site_data;
+        const parsed = typeof raw === 'string' ? JSON.parse(raw) : raw;
+        if (parsed?.siteContent || parsed?.profile) {
+          siteContent = parsed.siteContent || parsed;
+          if (!logoConfig) logoConfig = parsed.logoConfig;
+          if (!stickyFooterConfig) stickyFooterConfig = parsed.stickyFooterConfig;
+        }
+      } catch (e) {}
+    }
+
+    if (!siteContent && (payload.profile || payload.publications || payload.agenda || payload.pillars || incomingData?.profile || root?.profile)) {
       siteContent = {
-        profile: payload.profile || defaultInitialSiteData.siteContent.profile,
-        education: payload.education || [],
-        pillars: payload.pillars || [],
-        quotes: payload.quotes || [],
-        publications: payload.publications || [],
-        experience: payload.experience || payload.experiences || [],
-        agenda: payload.agenda || [],
-        gallery: payload.gallery || [],
-        visibility: payload.visibility || defaultInitialSiteData.siteContent.visibility,
-        heroSettings: payload.heroSettings || defaultInitialSiteData.siteContent.heroSettings,
-        shareSettings: payload.shareSettings || defaultInitialSiteData.siteContent.shareSettings
+        profile: incomingData?.profile || root?.profile || payload.profile || defaultInitialSiteData.siteContent.profile,
+        education: incomingData?.education || root?.education || payload.education || [],
+        pillars: incomingData?.pillars || root?.pillars || payload.pillars || [],
+        quotes: incomingData?.quotes || root?.quotes || payload.quotes || [],
+        publications: incomingData?.publications || root?.publications || payload.publications || [],
+        experience: incomingData?.experience || incomingData?.experiences || root?.experience || payload.experience || payload.experiences || [],
+        agenda: incomingData?.agenda || root?.agenda || payload.agenda || [],
+        gallery: incomingData?.gallery || root?.gallery || payload.gallery || [],
+        visibility: incomingData?.visibility || root?.visibility || payload.visibility || defaultInitialSiteData.siteContent.visibility,
+        heroSettings: incomingData?.heroSettings || root?.heroSettings || payload.heroSettings || defaultInitialSiteData.siteContent.heroSettings,
+        shareSettings: incomingData?.shareSettings || root?.shareSettings || payload.shareSettings || defaultInitialSiteData.siteContent.shareSettings
       };
     }
 
@@ -4386,7 +4479,7 @@ CARA PEMULIHAN (RESTORE):
     const zipBuffer = await zip.generateAsync({
       type: 'nodebuffer',
       compression: 'DEFLATE',
-      compressionOptions: { level: 9 }
+      compressionOptions: { level: 1 } // Super fast compression
     });
 
     const now = new Date();
