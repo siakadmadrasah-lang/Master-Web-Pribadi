@@ -542,7 +542,7 @@ export const MediaChannelSection: React.FC<MediaChannelSectionProps> = ({
                           type="button"
                           onClick={() => {
                             setActiveVideo({
-                              id: currentSpotlightVideo.id || currentSpotlightVideo.videoId,
+                              id: currentSpotlightVideo.id || currentSpotlightVideo.videoId || '',
                               title: currentSpotlightVideo.title,
                               description: currentSpotlightVideo.description,
                               videoUrl: currentSpotlightUrl,
@@ -742,7 +742,7 @@ export const MediaChannelSection: React.FC<MediaChannelSectionProps> = ({
                       key={vid.id || vid.videoId || idx}
                       onClick={() =>
                         setActiveVideo({
-                          id: vid.id || vid.videoId,
+                          id: vid.id || vid.videoId || '',
                           title: vid.title,
                           description: vid.description,
                           videoUrl: effectiveVideoUrl,

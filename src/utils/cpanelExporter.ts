@@ -39,13 +39,26 @@ export { triggerZipDownload };
 
 export const CPANEL_DB_CONFIG = {
   host: 'localhost',
-  user: 'denbagus_webpersonal',
-  dbName: 'denbagues_webpersonal',
-  username: 'denbagus_webpersonal',
-  database: 'denbagues_webpersonal',
+  user: 'denbagus_masterweb',
+  dbName: 'denbagus_masterweb',
+  username: 'denbagus_masterweb',
+  database: 'denbagus_masterweb',
   password: 'masbagus15',
   port: 3306,
   charset: 'utf8mb4'
+};
+
+export const generatePhpIniConfig = (): string => {
+  return `; =============================================================
+; KONFIGURASI PHP CPANEL & SHARED HOSTING
+; Mengizinkan unggah berkas besar & paket cadangan komplit ZIP
+; =============================================================
+upload_max_filesize = 256M
+post_max_size = 256M
+memory_limit = 512M
+max_execution_time = 300
+max_input_time = 300
+`;
 };
 
 export const generateCpanelHtaccess = (): string => {
@@ -57,6 +70,7 @@ export const generateCpanelHtaccess = (): string => {
 
 # 1. Entry Point Configuration
 DirectoryIndex index.php index.html
+Options -Indexes
 
 # 2. URL Rewriting for Single Page Application & API Routing
 <IfModule mod_rewrite.c>
@@ -129,6 +143,22 @@ DirectoryIndex index.php index.html
     AddType audio/wav .wav
     AddType audio/ogg .oga .ogg
     AddType audio/mp4 .m4a .aac
+</IfModule>
+
+# 4. Konfigurasi Batas Unggah PHP (Anti Gagal Pulihkan ZIP)
+<IfModule mod_php7.c>
+    php_value upload_max_filesize 256M
+    php_value post_max_size 256M
+    php_value memory_limit 512M
+    php_value max_execution_time 300
+    php_value max_input_time 300
+</IfModule>
+<IfModule mod_php.c>
+    php_value upload_max_filesize 256M
+    php_value post_max_size 256M
+    php_value memory_limit 512M
+    php_value max_execution_time 300
+    php_value max_input_time 300
 </IfModule>
 `;
 };
@@ -240,6 +270,8 @@ export const downloadCpanelPackageZip = async (
   // 1. Root Database & Config files
   zip.file('database.sql', generateDatabaseSql(content, logoConfig, footerConfig));
   zip.file('db_config.php', generateDbConfigFile());
+  zip.file('.user.ini', generatePhpIniConfig());
+  zip.file('php.ini', generatePhpIniConfig());
   zip.file('unzip.php', generateUnzipPhpFile());
   zip.file('index.php', generateIndexPhpFallback());
   zip.file('og-image.php', generateOgImagePhp());
@@ -353,22 +385,90 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 /**
  * Jembatan Akses Web (Bridge Wrapper) cPanel
  * Web Personal Ust. Jaenal Maskun, S.Pd.I.
+ * 
+ * FUNGSI:
+ * Letakkan berkas ini sebagai \`public_html/index.php\` jika berkas web utama
+ * berada di dalam subfolder \`public_html/denbaguse.my.id/\`.
+ * Berkas ini akan langsung memuat web secara transparan tanpa menampilkan folder.
  */
 @ini_set('display_errors', '0');
 error_reporting(0);
-$targetFolder = 'web';
-$targetPath = __DIR__ . '/' . $targetFolder;
-if (file_exists($targetPath . '/index.php')) {
-    chdir($targetPath);
-    require $targetPath . '/index.php';
-    exit;
-} elseif (file_exists($targetPath . '/index.html')) {
-    header('Location: ./' . $targetFolder . '/');
-    exit;
-} else {
-    echo "Folder website '$targetFolder' belum ditemukan. Pastikan Anda telah mengekstrak ZIP ke dalam subfolder 'public_html/$targetFolder/'.";
+
+$docRoot = rtrim($_SERVER['DOCUMENT_ROOT'] ?? __DIR__, '/');
+$candidates = [
+    __DIR__ . '/denbaguse.my.id',
+    $docRoot . '/denbaguse.my.id',
+    __DIR__ . '/web',
+    $docRoot . '/web'
+];
+
+$targetDir = null;
+foreach ($candidates as $candidate) {
+    if (file_exists($candidate . '/index.php') || file_exists($candidate . '/index.html')) {
+        $targetDir = $candidate;
+        break;
+    }
 }
+
+if ($targetDir) {
+    if (file_exists($targetDir . '/index.php')) {
+        chdir($targetDir);
+        require $targetDir . '/index.php';
+        exit;
+    }
+    if (file_exists($targetDir . '/index.html')) {
+        echo file_get_contents($targetDir . '/index.html');
+        exit;
+    }
+} else {
+    echo "Folder website 'denbaguse.my.id' belum ditemukan di dalam public_html.";
+}
+?>`);
+
+  zip.file('PUBLIC_HTML_HTACCESS_JEMBATAN.txt', `# =============================================================
+# .HTACCESS UNTUK ROOT public_html (DI LUAR FOLDER denbaguse.my.id)
+# Salin isi berkas ini ke dalam: /public_html/.htaccess
+# 
+# FUNGSI:
+# Saat pengunjung membuka https://denbaguse.my.id, server langsung
+# memuat isi dari subfolder denbaguse.my.id secara transparan
+# TANPA menampilkan nama folder di URL dan TANPA tampilan 'Index of /'.
+# =============================================================
+Options -Indexes
+DirectoryIndex index.php index.html
+
+<IfModule mod_rewrite.c>
+    RewriteEngine On
+
+    # Arahkan domain denbaguse.my.id langsung ke subfolder denbaguse.my.id
+    RewriteCond %{HTTP_HOST} ^(www\\.)?denbaguse\\.my\\.id$ [NC]
+    RewriteCond %{REQUEST_URI} !^/denbaguse\\.my\\.id/
+    RewriteRule ^(.*)$ /denbaguse.my.id/$1 [L]
+</IfModule>
 `);
+
+  zip.file('PUBLIC_HTML_INDEX_JEMBATAN.php', `<?php
+/**
+ * JEMBATAN OTOMATIS ROOT public_html
+ * Salin atau Rename file ini menjadi: public_html/index.php
+ * 
+ * FUNGSI:
+ * Membuka website di dalam subfolder denbaguse.my.id secara langsung
+ * ketika domain denbaguse.my.id diakses.
+ */
+@ini_set('display_errors', '0');
+error_reporting(0);
+
+$subfolder = __DIR__ . '/denbaguse.my.id';
+if (file_exists($subfolder . '/index.php')) {
+    chdir($subfolder);
+    require $subfolder . '/index.php';
+    exit;
+} elseif (file_exists($subfolder . '/index.html')) {
+    echo file_get_contents($subfolder . '/index.html');
+    exit;
+}
+?>`);
   zip.file('README_CPANEL.md', generateCpanelReadme());
   zip.file('PANDUAN_HOSTING_CPANEL.txt', generateCpanelReadme());
   zip.file('PANDUAN_AKSES_FOLDER_LUAR_PUBLIC_HTML.txt', `================================================================================
@@ -393,12 +493,24 @@ LANGKAH 1: EKSTRAK ZIP KE SUBFOLDER PILIHAN ANDA
 1. Masuk ke cPanel > File Manager.
 2. Buka folder "public_html".
 3. Buat folder baru sesuai keinginan Anda, contoh:
-   - "web"       -> lokasi: public_html/web/
-   - "profil"    -> lokasi: public_html/profil/
-   - "ustadz"    -> lokasi: public_html/ustadz/
+   - "denbaguse.my.id" -> lokasi: public_html/denbaguse.my.id/
+   - "web"             -> lokasi: public_html/web/
+   - "profil"          -> lokasi: public_html/profil/
 4. Upload file ZIP ini ke dalam folder tersebut, lalu klik kanan > "Extract".
 5. Pastikan semua berkas (.htaccess, index.php, index.html, folder api, dll)
    berada langsung di dalam folder tersebut (bukan tersarang di subfolder ganda).
+
+--------------------------------------------------------------------------------
+KONFIGURASI DATABASE OTOMATIS:
+--------------------------------------------------------------------------------
+Paket ZIP ini SUDAH OTOMATIS dikonfigurasi untuk database cPanel:
+- Database Name: denbagus_masterweb
+- Database User: denbagus_masterweb
+- Password DB  : masbagus15
+- Host DB      : localhost (port 3306)
+
+Saat diekstrak di cPanel, berkas db_config.php langsung siap pakai dan terhubung
+otomatis ke database denbagus_masterweb tanpa perlu konfigurasi ulang!
 
 --------------------------------------------------------------------------------
 LANGKAH 2: CARA AKSES WEBSITE ANDA
@@ -470,6 +582,8 @@ Semoga panduan ini membantu kelancaran dakwah & karya Ust. Jaenal Maskun, S.Pd.I
     apiFolder.file('admin-update-profile.php', generateApiAdminProfilePhp());
     apiFolder.file('admin-update-password.php', generateApiAdminProfilePhp());
     apiFolder.file('db_config.php', generateDbConfigFile());
+    apiFolder.file('.user.ini', generatePhpIniConfig());
+    apiFolder.file('php.ini', generatePhpIniConfig());
   }
 
   // 3. Folder data/

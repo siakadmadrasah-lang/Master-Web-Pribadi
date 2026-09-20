@@ -1,8 +1,8 @@
 {
   "host": "localhost",
-  "user": "denbagus_webpersonal",
+  "user": "denbagus_masterweb",
   "password": "masbagus15",
-  "database": "denbagues_webpersonal",
+  "database": "denbagus_masterweb",
   "port": 3306,
   "connectTimeout": 5000,
   "waitForConnections": true,

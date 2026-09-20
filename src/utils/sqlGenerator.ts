@@ -3,8 +3,8 @@ import { defaultSiteContent } from '../data/personalData';
 
 export const DEFAULT_DB_CONFIG = {
   host: 'localhost',
-  user: 'denbagus_webpersonal',
-  database: 'denbagues_webpersonal',
+  user: 'denbagus_masterweb',
+  database: 'denbagus_masterweb',
   password: 'masbagus15',
   port: 3306,
   charset: 'utf8mb4',

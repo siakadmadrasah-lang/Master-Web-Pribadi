@@ -211,9 +211,9 @@ export const AdminPortal: React.FC<AdminPortalProps> = ({
   } | null>(null);
   const [dbConfigForm, setDbConfigForm] = useState({
     host: DEFAULT_DB_CONFIG.host || 'localhost',
-    user: DEFAULT_DB_CONFIG.user || 'denbagus_webpersonal',
+    user: DEFAULT_DB_CONFIG.user || 'denbagus_masterweb',
     password: DEFAULT_DB_CONFIG.password || 'masbagus15',
-    database: DEFAULT_DB_CONFIG.database || 'denbagues_webpersonal',
+    database: DEFAULT_DB_CONFIG.database || 'denbagus_masterweb',
     port: '3306',
   });
   const [isTestingDb, setIsTestingDb] = useState(false);
@@ -1521,7 +1521,7 @@ export const AdminPortal: React.FC<AdminPortalProps> = ({
       const url = URL.createObjectURL(blob);
       const link = document.createElement('a');
       link.href = url;
-      link.setAttribute('download', 'denbagues_webpersonal_database.sql');
+      link.setAttribute('download', 'denbagus_masterweb_database.sql');
       document.body.appendChild(link);
       link.click();
       document.body.removeChild(link);
@@ -6084,11 +6084,11 @@ export const AdminPortal: React.FC<AdminPortalProps> = ({
                           <div className="p-3 bg-emerald-50/70 rounded-2xl border border-emerald-200 flex items-center justify-between">
                             <div>
                               <span className="text-[10px] font-bold text-emerald-700 uppercase block">Nama Database (DB Name):</span>
-                              <span className="text-xs font-mono font-bold text-emerald-950">denbagues_webpersonal</span>
+                              <span className="text-xs font-mono font-bold text-emerald-950">denbagus_masterweb</span>
                             </div>
                             <button
                               type="button"
-                              onClick={() => handleCopyText('denbagues_webpersonal', 'Nama Database')}
+                              onClick={() => handleCopyText('denbagus_masterweb', 'Nama Database')}
                               className="p-1.5 rounded-lg text-emerald-700 hover:text-emerald-900 hover:bg-emerald-100 transition-colors"
                               title="Salin Nama DB"
                             >
@@ -6100,11 +6100,11 @@ export const AdminPortal: React.FC<AdminPortalProps> = ({
                           <div className="p-3 bg-emerald-50/70 rounded-2xl border border-emerald-200 flex items-center justify-between">
                             <div>
                               <span className="text-[10px] font-bold text-emerald-700 uppercase block">Username DB (DB User):</span>
-                              <span className="text-xs font-mono font-bold text-emerald-950">denbagus_webpersonal</span>
+                              <span className="text-xs font-mono font-bold text-emerald-950">denbagus_masterweb</span>
                             </div>
                             <button
                               type="button"
-                              onClick={() => handleCopyText('denbagus_webpersonal', 'Username DB')}
+                              onClick={() => handleCopyText('denbagus_masterweb', 'Username DB')}
                               className="p-1.5 rounded-lg text-emerald-700 hover:text-emerald-900 hover:bg-emerald-100 transition-colors"
                               title="Salin Username DB"
                             >
@@ -6208,8 +6208,8 @@ export const AdminPortal: React.FC<AdminPortalProps> = ({
                                 Masuk ke panel kontrol Plesk Anda, pilih menu <strong className="text-emerald-900 font-bold">Databases</strong>, lalu klik <strong className="text-emerald-900 font-bold">Add Database</strong>:
                               </p>
                               <ul className="text-xs text-gray-600 space-y-1 list-disc pl-5">
-                                <li>Database name: <code className="font-mono text-emerald-900 font-bold bg-white px-1 py-0.5 rounded border">denbagues_webpersonal</code></li>
-                                <li>Database user: <code className="font-mono text-emerald-900 font-bold bg-white px-1 py-0.5 rounded border">denbagus_webpersonal</code></li>
+                                <li>Database name: <code className="font-mono text-emerald-900 font-bold bg-white px-1 py-0.5 rounded border">denbagus_masterweb</code></li>
+                                <li>Database user: <code className="font-mono text-emerald-900 font-bold bg-white px-1 py-0.5 rounded border">denbagus_masterweb</code></li>
                                 <li>Password: <code className="font-mono text-amber-900 font-bold bg-white px-1 py-0.5 rounded border">masbagus15</code></li>
                               </ul>
                             </div>
@@ -6574,7 +6574,7 @@ export const AdminPortal: React.FC<AdminPortalProps> = ({
                                 Buka cPanel hosting Anda, cari menu <strong>MySQL® Databases</strong> atau <strong>MySQL Database Wizard</strong>:
                               </p>
                               <ul className="text-xs text-gray-700 space-y-1 list-disc pl-5">
-                                <li>Buat nama database baru (misal: <code>denbagues_webpersonal</code>).</li>
+                                <li>Buat nama database baru (misal: <code>denbagus_masterweb</code>).</li>
                                 <li>Buat pengguna database (user) dan tentukan kata sandi yang kuat.</li>
                                 <li>Hubungkan pengguna ke database dan centang <strong>ALL PRIVILEGES</strong>.</li>
                               </ul>

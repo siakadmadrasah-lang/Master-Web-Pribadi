@@ -28,7 +28,7 @@ import {
   generateApiExportZipPhp,
   generateApiAdminProfilePhp
 } from './src/utils/pleskExporter';
-import { generateCpanelHtaccess, generateCpanelReadme } from './src/utils/cpanelExporter';
+import { generateCpanelHtaccess, generateCpanelReadme, generatePhpIniConfig } from './src/utils/cpanelExporter';
 
 dotenv.config();
 
@@ -281,9 +281,9 @@ app.get('/avatar-jaenal.jpg', (req, res) => {
 // Default MySQL Configuration
 const defaultMySQLConfig = {
   host: process.env.MYSQL_HOST || 'localhost',
-  user: process.env.MYSQL_USER || 'denbagus_webpersonal',
+  user: process.env.MYSQL_USER || 'denbagus_masterweb',
   password: process.env.MYSQL_PASSWORD || 'masbagus15',
-  database: process.env.MYSQL_DATABASE || 'denbagues_webpersonal',
+  database: process.env.MYSQL_DATABASE || 'denbagus_masterweb',
   port: parseInt(process.env.MYSQL_PORT || '3306', 10),
   connectTimeout: 5000,
   waitForConnections: true,
@@ -1184,6 +1184,7 @@ function extractBase64Buffer(dataUriOrBase64: string): { buffer: Buffer; mimeTyp
       if (buffer.length === 0) return null;
       return { buffer, mimeType, ext };
     }
+    return null;
   } catch (err) {
     return null;
   }
@@ -6244,9 +6245,11 @@ $homeDir = dirname($docRoot);
 
 // Daftar kandidat lokasi folder aplikasi
 $candidates = [
+    $docRoot . '/denbaguse.my.id',
     $docRoot . '/web',
     $docRoot . '/web_pribadi',
     $docRoot . '/ust_jaenal',
+    $homeDir . '/denbaguse.my.id',
     $homeDir . '/web_pribadi',
     $homeDir . '/web'
 ];
@@ -6256,6 +6259,20 @@ foreach ($candidates as $candidate) {
     if (file_exists($candidate . '/index.php') || file_exists($candidate . '/index.html')) {
         $targetDir = $candidate;
         break;
+    }
+}
+
+if (!$targetDir && is_dir($docRoot)) {
+    $subScan = @scandir($docRoot);
+    if ($subScan) {
+        foreach ($subScan as $d) {
+            if ($d === '.' || $d === '..' || $d === 'cgi-bin') continue;
+            $subPath = $docRoot . '/' . $d;
+            if (is_dir($subPath) && (file_exists($subPath . '/index.php') || file_exists($subPath . '/index.html'))) {
+                $targetDir = $subPath;
+                break;
+            }
+        }
     }
 }
 
@@ -6324,12 +6341,24 @@ LANGKAH 1: EKSTRAK ZIP KE SUBFOLDER PILIHAN ANDA
 1. Masuk ke cPanel > File Manager.
 2. Buka folder "public_html".
 3. Buat folder baru sesuai keinginan Anda, contoh:
-   - "web"       -> lokasi: public_html/web/
-   - "profil"    -> lokasi: public_html/profil/
-   - "ustadz"    -> lokasi: public_html/ustadz/
+   - "denbaguse.my.id" -> lokasi: public_html/denbaguse.my.id/
+   - "web"             -> lokasi: public_html/web/
+   - "profil"          -> lokasi: public_html/profil/
 4. Upload file ZIP ini ke dalam folder tersebut, lalu klik kanan > "Extract".
 5. Pastikan semua berkas (.htaccess, index.php, index.html, folder api, dll)
    berada langsung di dalam folder tersebut (bukan tersarang di subfolder ganda).
+
+--------------------------------------------------------------------------------
+KONFIGURASI DATABASE OTOMATIS:
+--------------------------------------------------------------------------------
+Paket ZIP ini SUDAH OTOMATIS dikonfigurasi untuk database cPanel:
+- Database Name: denbagus_masterweb
+- Database User: denbagus_masterweb
+- Password DB  : masbagus15
+- Host DB      : localhost (port 3306)
+
+Saat diekstrak di cPanel, berkas db_config.php langsung siap pakai dan terhubung
+otomatis ke database denbagus_masterweb tanpa perlu konfigurasi ulang!
 
 --------------------------------------------------------------------------------
 LANGKAH 2: CARA AKSES WEBSITE ANDA
@@ -7486,6 +7515,8 @@ const handleExportCpanelZip = async (req: any, res: any) => {
     // 1. Root Database & Config files for cPanel
     zip.file('database.sql', generateSqlContent(currentData));
     zip.file('db_config.php', generatePleskDbConfigPhp());
+    zip.file('.user.ini', generatePhpIniConfig());
+    zip.file('php.ini', generatePhpIniConfig());
     zip.file('.htaccess', generateCpanelHtaccess());
     zip.file('index.php', generatePleskIndexPhp());
     zip.file('og-image.php', generateOgImagePhp());
@@ -7494,6 +7525,49 @@ const handleExportCpanelZip = async (req: any, res: any) => {
     zip.file('redirect.html', generateCpanelBridgeHtml());
     zip.file('symlink_maker.php', generateCpanelSymlinkMakerPhp());
     zip.file('index_bridge.php', generateCpanelIndexBridgePhp());
+    zip.file('PUBLIC_HTML_HTACCESS_JEMBATAN.txt', `# =============================================================
+# .HTACCESS UNTUK ROOT public_html (DI LUAR FOLDER denbaguse.my.id)
+# Salin isi berkas ini ke dalam: /public_html/.htaccess
+# 
+# FUNGSI:
+# Saat pengunjung membuka https://denbaguse.my.id, server langsung
+# memuat isi dari subfolder denbaguse.my.id secara transparan
+# TANPA menampilkan nama folder di URL dan TANPA tampilan 'Index of /'.
+# =============================================================
+Options -Indexes
+DirectoryIndex index.php index.html
+
+<IfModule mod_rewrite.c>
+    RewriteEngine On
+
+    # Arahkan domain denbaguse.my.id langsung ke subfolder denbaguse.my.id
+    RewriteCond %{HTTP_HOST} ^(www\\.)?denbaguse\\.my\\.id$ [NC]
+    RewriteCond %{REQUEST_URI} !^/denbaguse\\.my\\.id/
+    RewriteRule ^(.*)$ /denbaguse.my.id/$1 [L]
+</IfModule>
+`);
+    zip.file('PUBLIC_HTML_INDEX_JEMBATAN.php', `<?php
+/**
+ * JEMBATAN OTOMATIS ROOT public_html
+ * Salin atau Rename file ini menjadi: public_html/index.php
+ * 
+ * FUNGSI:
+ * Membuka website di dalam subfolder denbaguse.my.id secara langsung
+ * ketika domain denbaguse.my.id diakses.
+ */
+@ini_set('display_errors', '0');
+error_reporting(0);
+
+$subfolder = __DIR__ . '/denbaguse.my.id';
+if (file_exists($subfolder . '/index.php')) {
+    chdir($subfolder);
+    require $subfolder . '/index.php';
+    exit;
+} elseif (file_exists($subfolder . '/index.html')) {
+    echo file_get_contents($subfolder . '/index.html');
+    exit;
+}
+?>`);
     zip.file('README_CPANEL.md', generateCpanelReadme());
     zip.file('PANDUAN_HOSTING_CPANEL.txt', generateCpanelReadme());
     zip.file('PANDUAN_AKSES_FOLDER_LUAR_PUBLIC_HTML.txt', generateCpanelFolderGuide());
@@ -7534,6 +7608,8 @@ const handleExportCpanelZip = async (req: any, res: any) => {
       apiFolder.file('admin-update-profile.php', generateApiAdminProfilePhp());
       apiFolder.file('admin-update-password.php', generateApiAdminProfilePhp());
       apiFolder.file('db_config.php', generatePleskDbConfigPhp());
+      apiFolder.file('.user.ini', generatePhpIniConfig());
+      apiFolder.file('php.ini', generatePhpIniConfig());
     }
 
     // 3. Folder data/

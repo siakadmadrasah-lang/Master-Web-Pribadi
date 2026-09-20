@@ -5,8 +5,8 @@ import { generateDatabaseSql } from './sqlGenerator';
 
 export const PLESK_DB_CONFIG = {
   host: 'localhost',
-  user: 'denbagus_webpersonal',
-  database: 'denbagues_webpersonal',
+  user: 'denbagus_masterweb',
+  database: 'denbagus_masterweb',
   password: 'masbagus15',
   port: 3306,
   charset: 'utf8mb4',
@@ -1312,7 +1312,13 @@ if (!$binary) {
     exit;
 }
 
-$filename = $type . '_' . time() . '_' . substr(md5(uniqid()), 0, 6) . '.' . $ext;
+if (!empty($input['filename'])) {
+    $rawFn = basename($input['filename']);
+    $rawFn = preg_replace('/[^a-zA-Z0-9_\\-\\.]/', '_', $rawFn);
+    $filename = !empty($rawFn) ? $rawFn : ($type . '_' . time() . '_' . substr(md5(uniqid()), 0, 6) . '.' . $ext);
+} else {
+    $filename = $type . '_' . time() . '_' . substr(md5(uniqid()), 0, 6) . '.' . $ext;
+}
 $targetPath = $uploadsDir . '/' . $filename;
 
 if (@file_put_contents($targetPath, $binary)) {
@@ -2214,8 +2220,17 @@ if ($_SERVER['REQUEST_METHOD'] === 'OPTIONS') {
     exit;
 }
 
-require_once __DIR__ . '/../db_config.php';
-$pdo = getDbConnection();
+$pdo = null;
+if (file_exists(__DIR__ . '/../db_config.php')) {
+    @require_once __DIR__ . '/../db_config.php';
+} elseif (file_exists(__DIR__ . '/db_config.php')) {
+    @require_once __DIR__ . '/db_config.php';
+}
+if (function_exists('getDbConnection')) {
+    try {
+        $pdo = getDbConnection();
+    } catch (\Throwable $e) {}
+}
 
 $dataDir = __DIR__ . '/../data';
 $snapshotsDir = $dataDir . '/snapshots';
@@ -2385,7 +2400,13 @@ if ($_SERVER['REQUEST_METHOD'] === 'OPTIONS') {
 
 if (!isset($_FILES['backupZip']) || empty($_FILES['backupZip']['tmp_name'])) {
     http_response_code(400);
-    echo json_encode(['success' => false, 'error' => 'Tidak ada berkas ZIP yang diunggah'], JSON_UNESCAPED_UNICODE);
+    echo json_encode(['success' => false, 'error' => 'Tidak ada berkas ZIP yang diunggah. Jika ukuran berkas besar, pastikan batas upload_max_filesize dan post_max_size di cPanel telah dinaikkan.'], JSON_UNESCAPED_UNICODE);
+    exit;
+}
+
+if (!class_exists('ZipArchive')) {
+    http_response_code(400);
+    echo json_encode(['success' => false, 'error' => 'Ekstensi PHP ZipArchive belum aktif di server hosting. Aktifkan modul php-zip di cPanel (menu Select PHP Version / PHP Extensions).'], JSON_UNESCAPED_UNICODE);
     exit;
 }
 
@@ -2397,8 +2418,17 @@ if ($zip->open($zipTmpPath) !== TRUE) {
     exit;
 }
 
-require_once __DIR__ . '/../db_config.php';
-$pdo = getDbConnection();
+$pdo = null;
+if (file_exists(__DIR__ . '/../db_config.php')) {
+    @require_once __DIR__ . '/../db_config.php';
+} elseif (file_exists(__DIR__ . '/db_config.php')) {
+    @require_once __DIR__ . '/db_config.php';
+}
+if (function_exists('getDbConnection')) {
+    try {
+        $pdo = getDbConnection();
+    } catch (\Throwable $e) {}
+}
 
 $dataDir = __DIR__ . '/../data';
 $uploadsDir = __DIR__ . '/../uploads';
@@ -2960,7 +2990,7 @@ export const downloadPleskPackageZip = async (
   const zip = new JSZip();
   const content = siteContent || defaultSiteContent;
 
-  if (onProgress) onProgress(10, 'Menyiapkan database MySQL denbagues_webpersonal...');
+  if (onProgress) onProgress(10, 'Menyiapkan database MySQL denbagus_masterweb...');
 
   // 1. Root Database & Config files
   zip.file('database.sql', generateDatabaseSql(content, logoConfig, footerConfig));
