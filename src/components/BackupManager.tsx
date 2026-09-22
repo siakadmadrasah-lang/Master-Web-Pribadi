@@ -484,37 +484,9 @@ export const BackupManager: React.FC<BackupManagerProps> = ({
 
         const parsed = JSON.parse(jsonContentStr);
 
-        // Extract media files in uploads/ into Base64 map
-        const zipMediaMap: Record<string, string> = {};
+        // Count media files in uploads/ without bloating memory with base64 strings
         let mediaFilesCount = 0;
-        for (const [rawPath, entry] of Object.entries(zip.files)) {
-          if (entry.dir) continue;
-          const normalized = rawPath.replace(/\\/g, '/');
-          if (normalized.includes('__MACOSX') || normalized.startsWith('.')) continue;
-
-          if (normalized.includes('uploads/') || normalized.includes('assets/uploads/')) {
-            const fileName = normalized.split('/').pop() || '';
-            if (fileName && !fileName.startsWith('.')) {
-              mediaFilesCount++;
-              try {
-                const base64Str = await entry.async('base64');
-                let mime = 'image/jpeg';
-                const lower = fileName.toLowerCase();
-                if (lower.endsWith('.png')) mime = 'image/png';
-                else if (lower.endsWith('.webp')) mime = 'image/webp';
-                else if (lower.endsWith('.svg')) mime = 'image/svg+xml';
-                else if (lower.endsWith('.gif')) mime = 'image/gif';
-
-                const dataUrl = `data:${mime};base64,${base64Str}`;
-                zipMediaMap[fileName] = dataUrl;
-                zipMediaMap[`/uploads/${fileName}`] = dataUrl;
-                zipMediaMap[`uploads/${fileName}`] = dataUrl;
-                zipMediaMap[`assets/uploads/${fileName}`] = dataUrl;
-                zipMediaMap[`/assets/uploads/${fileName}`] = dataUrl;
-              } catch (e) {}
-            }
-          }
-        }
+        let avatarPreviewDataUrl: string | null = null;
 
         const zipRoot = parsed.backup ? (parsed.backup.data || parsed.backup) : parsed;
         const rawContent = zipRoot.data?.siteContent || zipRoot.siteContent || (zipRoot.profile ? zipRoot : null);
@@ -525,25 +497,39 @@ export const BackupManager: React.FC<BackupManagerProps> = ({
         const cleanLogoContent = rawLogo ? JSON.parse(JSON.stringify(rawLogo)) : null;
         const cleanFooterContent = rawFooter ? JSON.parse(JSON.stringify(rawFooter)) : null;
 
-        let dataContent = cleanDataContent ? JSON.parse(JSON.stringify(cleanDataContent)) : null;
-        let logoContent = cleanLogoContent ? JSON.parse(JSON.stringify(cleanLogoContent)) : null;
-        let footerContent = cleanFooterContent ? JSON.parse(JSON.stringify(cleanFooterContent)) : null;
+        const targetAvatarPath = cleanDataContent?.profile?.avatarUrl;
+        const targetAvatarBase = targetAvatarPath ? targetAvatarPath.split('/').pop()?.toLowerCase() : null;
 
-        // If ZIP has media files, resolve relative URLs to Base64 data URLs for seamless offline/Android display
-        if (Object.keys(zipMediaMap).length > 0) {
-          if (dataContent) {
-            dataContent = deepResolveMediaUrls(dataContent, zipMediaMap);
-          }
-          if (logoContent) {
-            logoContent = deepResolveMediaUrls(logoContent, zipMediaMap);
-          }
-          if (footerContent) {
-            footerContent = deepResolveMediaUrls(footerContent, zipMediaMap);
+        for (const [rawPath, entry] of Object.entries(zip.files)) {
+          if (entry.dir) continue;
+          const normalized = rawPath.replace(/\\/g, '/');
+          if (normalized.includes('__MACOSX') || normalized.startsWith('.')) continue;
+
+          if (normalized.includes('uploads/') || normalized.includes('assets/uploads/')) {
+            const fileName = normalized.split('/').pop() || '';
+            if (fileName && !fileName.startsWith('.')) {
+              mediaFilesCount++;
+              // Extract ONLY the avatar thumbnail if matched, keeping memory lightweight (< 100KB)
+              if (!avatarPreviewDataUrl && targetAvatarBase && fileName.toLowerCase() === targetAvatarBase) {
+                try {
+                  const b64 = await entry.async('base64');
+                  if (b64.length < 200000) {
+                    avatarPreviewDataUrl = `data:image/jpeg;base64,${b64}`;
+                  }
+                } catch (e) {}
+              }
+            }
           }
         }
 
+        const dataContent = cleanDataContent;
+        const logoContent = cleanLogoContent;
+        const footerContent = cleanFooterContent;
+
         const content = dataContent || {};
-        if (content.profile?.avatarUrl) {
+        if (avatarPreviewDataUrl) {
+          setPreviewAvatar(avatarPreviewDataUrl);
+        } else if (content.profile?.avatarUrl) {
           setPreviewAvatar(content.profile.avatarUrl);
         } else {
           setPreviewAvatar(null);
@@ -576,7 +562,6 @@ export const BackupManager: React.FC<BackupManagerProps> = ({
           _cleanSiteContent: cleanDataContent,
           _cleanLogoConfig: cleanLogoContent,
           _cleanFooterConfig: cleanFooterContent,
-          _zipMediaMap: zipMediaMap,
           _fileType: 'zip',
           _mediaFilesCount: mediaFilesCount,
           _zipSourceFile: file
@@ -858,22 +843,44 @@ export const BackupManager: React.FC<BackupManagerProps> = ({
       }
 
       // 2. Intelligent Direct Restore Fallback (Bypasses cPanel zip upload limits)
-      if (!resultData) {
-        // Step 2A: If ZIP contained media files, upload them to /api/upload-image
-        if (parsedRestoreData._zipMediaMap && Object.keys(parsedRestoreData._zipMediaMap).length > 0) {
-          setRestoreSuccessMsg('Menyinkronkan berkas foto & media ke server...');
-          const mediaMap = parsedRestoreData._zipMediaMap as Record<string, string>;
-          const uniqueEntries = Object.entries(mediaMap).filter(([key]) => !key.startsWith('/') && !key.includes('/'));
-          for (const [fileName, dataUrl] of uniqueEntries) {
-            try {
-              await fetch('/api/upload-image', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ image: dataUrl, filename: fileName })
-              });
-            } catch (mediaErr) {
-              console.warn('Sinkronisasi media notice untuk', fileName, mediaErr);
+      if (!resultData && selectedFile) {
+        // Step 2A: Upload media files one-by-one if ZIP without keeping all base64 in memory
+        if (parsedRestoreData._fileType === 'zip') {
+          setRestoreSuccessMsg('Menyinkronkan berkas foto & media secara terpisah...');
+          try {
+            const zip = await JSZip.loadAsync(selectedFile);
+            for (const [rawPath, entry] of Object.entries(zip.files)) {
+              if (entry.dir) continue;
+              const normalized = rawPath.replace(/\\/g, '/');
+              if (normalized.includes('__MACOSX') || normalized.startsWith('.')) continue;
+
+              if (normalized.includes('uploads/') || normalized.includes('assets/uploads/')) {
+                const fileName = normalized.split('/').pop();
+                if (fileName && !fileName.startsWith('.')) {
+                  try {
+                    // Extract as base64 on-the-fly and upload immediately to release memory
+                    const base64Str = await entry.async('base64');
+                    let mime = 'image/jpeg';
+                    const lower = fileName.toLowerCase();
+                    if (lower.endsWith('.png')) mime = 'image/png';
+                    else if (lower.endsWith('.webp')) mime = 'image/webp';
+                    else if (lower.endsWith('.svg')) mime = 'image/svg+xml';
+                    else if (lower.endsWith('.gif')) mime = 'image/gif';
+
+                    const dataUrl = `data:${mime};base64,${base64Str}`;
+                    await fetch('/api/upload-image', {
+                      method: 'POST',
+                      headers: { 'Content-Type': 'application/json' },
+                      body: JSON.stringify({ image: dataUrl, filename: fileName })
+                    });
+                  } catch (singleErr) {
+                    console.warn('Notice uploading item:', fileName, singleErr);
+                  }
+                }
+              }
             }
+          } catch (zipErr) {
+            console.warn('Gagal membaca isi ZIP secara satuan:', zipErr);
           }
         }
 

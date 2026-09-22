@@ -242,11 +242,100 @@ DirectoryIndex index.php index.html
 export const generateIndexPhpFallback = (): string => {
   return `<?php
 /**
- * Dynamic Entry Point & Social Media Meta Injector for Plesk Hosting
+ * Dynamic Entry Point & Social Media Meta Injector for cPanel & Plesk Hosting
  * Web Personal Ust. Jaenal Maskun, S.Pd.I.
  */
 @ini_set('display_errors', '0');
 error_reporting(0);
+
+// =============================================================
+// OTOMATIS: Jembatan Root public_html jika Berada di Subfolder
+// Menjamin domain denbaguse.my.id langsung terbuka tanpa menampilkan isi folder!
+// =============================================================
+$__cDir = str_replace('\\\\', '/', __DIR__);
+$__pDir = str_replace('\\\\', '/', dirname($__cDir));
+$__pName = basename($__pDir);
+$__sName = basename($__cDir);
+
+if ($__pName === 'public_html' || is_dir($__pDir . '/public_html')) {
+    $__pubHtml = ($__pName === 'public_html') ? $__pDir : ($__pDir . '/public_html');
+    $__rHt = $__pubHtml . '/.htaccess';
+    $__rIdx = $__pubHtml . '/index.php';
+
+    $__needHt = !file_exists($__rHt) || (strpos(@file_get_contents($__rHt), $__sName) === false);
+    $__needIdx = !file_exists($__rIdx) || (strpos(@file_get_contents($__rIdx), $__sName) === false && strpos(@file_get_contents($__rIdx), 'subfolder') === false);
+
+    if ($__needHt && is_writable($__pubHtml)) {
+        $__htCode = "# =============================================================\\n" .
+            "# CPANEL ROOT public_html .HTACCESS (AUTOMATIC SUBFOLDER ROUTER)\\n" .
+            "# Domain: denbaguse.my.id | Subfolder: " . $__sName . "\\n" .
+            "# Anti-Folder Listing & Transparent Direct Access\\n" .
+            "# =============================================================\\n\\n" .
+            "Options -Indexes\\n" .
+            "DirectoryIndex index.php index.html\\n\\n" .
+            "<IfModule mod_rewrite.c>\\n" .
+            "    RewriteEngine On\\n" .
+            "    RewriteBase /\\n\\n" .
+            "    # Cegah loop jika request sudah mengarah ke subfolder\\n" .
+            "    RewriteCond %{REQUEST_URI} ^/" . preg_quote($__sName, '/') . "(/|$)\\n" .
+            "    RewriteRule ^ - [L]\\n\\n" .
+            "    # Layani berkas fisik langsung dari subfolder\\n" .
+            "    RewriteCond %{DOCUMENT_ROOT}/" . $__sName . "/$1 -f\\n" .
+            "    RewriteRule ^(.*)$ " . $__sName . "/$1 [L,QSA]\\n\\n" .
+            "    # Layani folder fisik langsung dari subfolder\\n" .
+            "    RewriteCond %{DOCUMENT_ROOT}/" . $__sName . "/$1 -d\\n" .
+            "    RewriteRule ^(.*)$ " . $__sName . "/$1/ [L,QSA]\\n\\n" .
+            "    # Routing untuk seluruh API ke subfolder\\n" .
+            "    RewriteRule ^api/(.*)$ " . $__sName . "/api/$1 [L,QSA]\\n\\n" .
+            "    # Routing SPA ke index.php subfolder\\n" .
+            "    RewriteRule ^(.*)$ " . $__sName . "/index.php [L,QSA]\\n" .
+            "</IfModule>\\n";
+        @file_put_contents($__rHt, $__htCode);
+    }
+
+    if ($__needIdx && is_writable($__pubHtml)) {
+        $__idxCode = "<?php\\n" .
+            "/**\\n" .
+            " * JEMBATAN OTOMATIS ROOT public_html\\n" .
+            " * Domain: denbaguse.my.id\\n" .
+            " * Melayani website langsung dari subfolder: " . $__sName . "\\n" .
+            " * TANPA menampilkan isi folder dan TANPA mengubah URL browser.\\n" .
+            " */\\n" .
+            "@ini_set('display_errors', '0');\\n" .
+            "error_reporting(0);\\n\\n" .
+            "\\$subfolder = __DIR__ . '/" . $__sName . "';\\n" .
+            "if (is_dir(\\$subfolder)) {\\n" .
+            "    \\$reqUri = parse_url(\\\$_SERVER['REQUEST_URI'] ?? '/', PHP_URL_PATH);\\n" .
+            "    \\$targetFile = \\$subfolder . \\$reqUri;\\n" .
+            "    if (\\$reqUri !== '/' && is_file(\\$targetFile)) {\\n" .
+            "        \\$ext = strtolower(pathinfo(\\$targetFile, PATHINFO_EXTENSION));\\n" .
+            "        \\$mimes = ['js'=>'application/javascript','css'=>'text/css','json'=>'application/json','png'=>'image/png','jpg'=>'image/jpeg','jpeg'=>'image/jpeg','svg'=>'image/svg+xml','ico'=>'image/x-icon','webp'=>'image/webp','mp3'=>'audio/mpeg','mp4'=>'video/mp4','woff'=>'font/woff','woff2'=>'font/woff2','ttf'=>'font/ttf'];\\n" .
+            "        if (isset(\\$mimes[\\$ext])) header('Content-Type: ' . \\$mimes[\\$ext]);\\n" .
+            "        readfile(\\$targetFile);\\n" .
+            "        exit;\\n" .
+            "    }\\n" .
+            "    chdir(\\$subfolder);\\n" .
+            "    if (file_exists(\\$subfolder . '/index.php')) {\\n" .
+            "        require \\$subfolder . '/index.php';\\n" .
+            "        exit;\\n" .
+            "    } elseif (file_exists(\\$subfolder . '/index.html')) {\\n" .
+            "        echo file_get_contents(\\$subfolder . '/index.html');\\n" .
+            "        exit;\\n" .
+            "    }\\n" .
+            "}\\n";
+        @file_put_contents($__rIdx, $__idxCode);
+    }
+
+    // Jika pengguna membuka https://denbaguse.my.id/<subfolder>/, alihkan bersih ke root https://denbaguse.my.id/
+    $__host = $_SERVER['HTTP_HOST'] ?? '';
+    $__uri = $_SERVER['REQUEST_URI'] ?? '';
+    if (strpos($__host, 'denbaguse.my.id') !== false && preg_match('#^/' . preg_quote($__sName, '#') . '(/.*)?$#', $__uri, $__m)) {
+        $__clean = !empty($__m[1]) ? $__m[1] : '/';
+        $__prot = (!empty($_SERVER['HTTPS']) && $_SERVER['HTTPS'] !== 'off') ? 'https://' : 'http://';
+        header("Location: " . $__prot . $__host . $__clean, true, 301);
+        exit;
+    }
+}
 
 $siteData = null;
 $dataFile1 = __DIR__ . '/data/persisted_site_data.json';
@@ -1947,7 +2036,68 @@ if (isset($_POST['extract'])) {
                 @rmdir($backupDir . '/public_uploads');
                 @rmdir($backupDir);
 
-                $message = "Sukses! Berkas " . htmlspecialchars($targetZip) . " berhasil diekstrak 100%. Seluruh data website, media unggahan & database MySQL Anda tetap utuh dan aman!";
+                // Pasang otomatis jembatan root public_html jika diekstrak di dalam subfolder
+                $__pDir = str_replace('\\\\', '/', dirname(__DIR__));
+                $__pName = basename($__pDir);
+                $__sName = basename(__DIR__);
+                if ($__pName === 'public_html' || is_dir($__pDir . '/public_html')) {
+                    $__pubHtml = ($__pName === 'public_html') ? $__pDir : ($__pDir . '/public_html');
+                    $__rHt = $__pubHtml . '/.htaccess';
+                    $__rIdx = $__pubHtml . '/index.php';
+
+                    $__htCode = "# =============================================================\\n" .
+                        "# CPANEL ROOT public_html .HTACCESS (AUTOMATIC SUBFOLDER ROUTER)\\n" .
+                        "# Domain: denbaguse.my.id | Subfolder: " . $__sName . "\\n" .
+                        "# Anti-Folder Listing & Transparent Direct Access\\n" .
+                        "# =============================================================\\n\\n" .
+                        "Options -Indexes\\n" .
+                        "DirectoryIndex index.php index.html\\n\\n" .
+                        "<IfModule mod_rewrite.c>\\n" .
+                        "    RewriteEngine On\\n" .
+                        "    RewriteBase /\\n\\n" .
+                        "    RewriteCond %{REQUEST_URI} ^/" . preg_quote($__sName, '/') . "(/|$)\\n" .
+                        "    RewriteRule ^ - [L]\\n\\n" .
+                        "    RewriteCond %{DOCUMENT_ROOT}/" . $__sName . "/$1 -f\\n" .
+                        "    RewriteRule ^(.*)$ " . $__sName . "/$1 [L,QSA]\\n\\n" .
+                        "    RewriteCond %{DOCUMENT_ROOT}/" . $__sName . "/$1 -d\\n" .
+                        "    RewriteRule ^(.*)$ " . $__sName . "/$1/ [L,QSA]\\n\\n" .
+                        "    RewriteRule ^api/(.*)$ " . $__sName . "/api/$1 [L,QSA]\\n\\n" .
+                        "    RewriteRule ^(.*)$ " . $__sName . "/index.php [L,QSA]\\n" .
+                        "</IfModule>\\n";
+                    @file_put_contents($__rHt, $__htCode);
+
+                    $__idxCode = "<?php\\n" .
+                        "/**\\n" .
+                        " * JEMBATAN OTOMATIS ROOT public_html\\n" .
+                        " * Domain: denbaguse.my.id\\n" .
+                        " * Melayani website langsung dari subfolder: " . $__sName . "\\n" .
+                        " */\\n" .
+                        "@ini_set('display_errors', '0');\\n" .
+                        "error_reporting(0);\\n\\n" .
+                        "\\$subfolder = __DIR__ . '/" . $__sName . "';\\n" .
+                        "if (is_dir(\\$subfolder)) {\\n" .
+                        "    \\$reqUri = parse_url(\\\$_SERVER['REQUEST_URI'] ?? '/', PHP_URL_PATH);\\n" .
+                        "    \\$targetFile = \\$subfolder . \\$reqUri;\\n" .
+                        "    if (\\$reqUri !== '/' && is_file(\\$targetFile)) {\\n" .
+                        "        \\$ext = strtolower(pathinfo(\\$targetFile, PATHINFO_EXTENSION));\\n" .
+                        "        \\$mimes = ['js'=>'application/javascript','css'=>'text/css','json'=>'application/json','png'=>'image/png','jpg'=>'image/jpeg','jpeg'=>'image/jpeg','svg'=>'image/svg+xml','ico'=>'image/x-icon','webp'=>'image/webp','mp3'=>'audio/mpeg','mp4'=>'video/mp4','woff'=>'font/woff','woff2'=>'font/woff2','ttf'=>'font/ttf'];\\n" .
+                        "        if (isset(\\$mimes[\\$ext])) header('Content-Type: ' . \\$mimes[\\$ext]);\\n" .
+                        "        readfile(\\$targetFile);\\n" .
+                        "        exit;\\n" .
+                        "    }\\n" .
+                        "    chdir(\\$subfolder);\\n" .
+                        "    if (file_exists(\\$subfolder . '/index.php')) {\\n" .
+                        "        require \\$subfolder . '/index.php';\\n" .
+                        "        exit;\\n" .
+                        "    } elseif (file_exists(\\$subfolder . '/index.html')) {\\n" .
+                        "        echo file_get_contents(\\$subfolder . '/index.html');\\n" .
+                        "        exit;\\n" .
+                        "    }\\n" .
+                        "}\\n";
+                    @file_put_contents($__rIdx, $__idxCode);
+                }
+
+                $message = "Sukses! Berkas " . htmlspecialchars($targetZip) . " berhasil diekstrak 100%. Jembatan root public_html otomatis dikonfigurasi sehingga domain denbaguse.my.id dapat langsung diakses tanpa menampilkan isi folder!";
                 $status = "success";
             } else {
                 $message = "Gagal mengekstrak berkas ZIP. Pastikan izin folder (CHMOD) direktori adalah 755.";
@@ -2550,20 +2700,20 @@ if ($existingData) {
     @file_put_contents($snapshotsDir . '/' . $snapId . '.json', json_encode($snapshotObj, JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE));
 }
 
-// 4. Merge dan simpan
+// 4. Update dan simpan
 $nowTs = time() * 1000;
 $current = $existingData ? $existingData : [];
 $restoredData = $current;
 $restoredData['lastUpdated'] = $nowTs;
 
 if ($siteContent) {
-    $restoredData['siteContent'] = array_merge(isset($current['siteContent']) && is_array($current['siteContent']) ? $current['siteContent'] : [], $siteContent);
+    $restoredData['siteContent'] = $siteContent;
 }
 if ($logoConfig) {
-    $restoredData['logoConfig'] = array_merge(isset($current['logoConfig']) && is_array($current['logoConfig']) ? $current['logoConfig'] : [], $logoConfig);
+    $restoredData['logoConfig'] = $logoConfig;
 }
 if ($stickyFooterConfig) {
-    $restoredData['stickyFooterConfig'] = array_merge(isset($current['stickyFooterConfig']) && is_array($current['stickyFooterConfig']) ? $current['stickyFooterConfig'] : [], $stickyFooterConfig);
+    $restoredData['stickyFooterConfig'] = $stickyFooterConfig;
 }
 
 // Proteksi OOM: Ekstrak string Base64 masif menjadi berkas fisik di uploads/

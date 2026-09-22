@@ -32,66 +32,43 @@
         } catch(e) {}
       })();
     </script>
-    <!-- Dynamic Subfolder, API & Media Adapter for cPanel / Plesk Subfolder Deployments -->
+    <!-- Dynamic Subfolder & API Adapter for cPanel / Plesk Subfolder Deployments -->
     <script>
       (function() {
         try {
-          var path = window.location.pathname || '/';
-          var dir = '/';
-          if (path) {
-            if (/\.[a-zA-Z0-9]+$/.test(path)) {
-              dir = path.substring(0, path.lastIndexOf('/') + 1);
-            } else {
-              dir = path.endsWith('/') ? path : path + '/';
-            }
+          var p = window.location.pathname || '/';
+          var subDir = '';
+
+          // Only detect subfolder if URL explicitly includes a known entry file or subpath
+          var match = p.match(/^(\/[a-zA-Z0-9_-]+)\/(index\.(php|html)|assets\/|uploads\/|api\/)/);
+          if (match && match[1]) {
+            subDir = match[1];
           }
-          window.__APP_BASE_DIR__ = dir;
-          var subDir = dir === '/' ? '' : dir.replace(/\/$/, '');
 
-          // Intercept window.fetch so /api/ and /uploads/ work natively in any subfolder
-          var origFetch = window.fetch;
-          window.fetch = function(input, init) {
-            if (typeof input === 'string') {
-              if (input.startsWith('/api/')) {
-                input = subDir + input;
-              } else if (input.startsWith('/uploads/')) {
-                input = subDir + input;
-              }
-            }
-            return origFetch.call(this, input, init);
-          };
+          window.__APP_BASE_DIR__ = subDir ? (subDir + '/') : '/';
 
-          // Intercept XMLHttpRequest
-          var origOpen = XMLHttpRequest.prototype.open;
-          XMLHttpRequest.prototype.open = function(method, url) {
-            if (typeof url === 'string') {
-              if (url.startsWith('/api/')) {
-                url = subDir + url;
-              } else if (url.startsWith('/uploads/')) {
-                url = subDir + url;
-              }
-            }
-            return origOpen.apply(this, arguments);
-          };
-
-          // If running in subfolder, automatically prefix /uploads/ in image elements
           if (subDir) {
-            var imgProto = HTMLImageElement.prototype;
-            var imgDesc = Object.getOwnPropertyDescriptor(imgProto, 'src');
-            if (imgDesc && imgDesc.set) {
-              Object.defineProperty(imgProto, 'src', {
-                set: function(val) {
-                  if (typeof val === 'string' && val.startsWith('/uploads/')) {
-                    val = subDir + val;
-                  }
-                  return imgDesc.set.call(this, val);
-                },
-                get: function() {
-                  return imgDesc.get.call(this);
-                },
-                configurable: true
-              });
-            }
+            // Intercept window.fetch so /api/ and /uploads/ work when accessed inside a subfolder
+            var origFetch = window.fetch;
+            window.fetch = function(input, init) {
+              if (typeof input === 'string') {
+                if (input.startsWith('/api/') || input.startsWith('/uploads/')) {
+                  input = subDir + input;
+                }
+              }
+              return origFetch.call(this, input, init);
+            };
+
+            // Intercept XMLHttpRequest
+            var origOpen = XMLHttpRequest.prototype.open;
+            XMLHttpRequest.prototype.open = function(method, url) {
+              if (typeof url === 'string') {
+                if (url.startsWith('/api/') || url.startsWith('/uploads/')) {
+                  url = subDir + url;
+                }
+              }
+              return origOpen.apply(this, arguments);
+            };
           }
         } catch(err) {}
       })();

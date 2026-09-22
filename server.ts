@@ -5124,11 +5124,100 @@ if ($pdo) {
 function generatePleskIndexPhp() {
   return `<?php
 /**
- * Dynamic Entry Point & Social Media Meta Injector for Plesk Hosting
+ * Dynamic Entry Point & Social Media Meta Injector for Plesk & cPanel Hosting
  * Web Personal Ust. Jaenal Maskun, S.Pd.I.
  */
 @ini_set('display_errors', '0');
 error_reporting(0);
+
+// =============================================================
+// OTOMATIS: Jembatan Root public_html jika Berada di Subfolder
+// Menjamin domain denbaguse.my.id langsung terbuka tanpa menampilkan isi folder!
+// =============================================================
+$__cDir = str_replace('\\\\', '/', __DIR__);
+$__pDir = str_replace('\\\\', '/', dirname($__cDir));
+$__pName = basename($__pDir);
+$__sName = basename($__cDir);
+
+if ($__pName === 'public_html' || is_dir($__pDir . '/public_html')) {
+    $__pubHtml = ($__pName === 'public_html') ? $__pDir : ($__pDir . '/public_html');
+    $__rHt = $__pubHtml . '/.htaccess';
+    $__rIdx = $__pubHtml . '/index.php';
+
+    $__needHt = !file_exists($__rHt) || (strpos(@file_get_contents($__rHt), $__sName) === false);
+    $__needIdx = !file_exists($__rIdx) || (strpos(@file_get_contents($__rIdx), $__sName) === false && strpos(@file_get_contents($__rIdx), 'subfolder') === false);
+
+    if ($__needHt && is_writable($__pubHtml)) {
+        $__htCode = "# =============================================================\\n" .
+            "# CPANEL ROOT public_html .HTACCESS (AUTOMATIC SUBFOLDER ROUTER)\\n" .
+            "# Domain: denbaguse.my.id | Subfolder: " . $__sName . "\\n" .
+            "# Anti-Folder Listing & Transparent Direct Access\\n" .
+            "# =============================================================\\n\\n" .
+            "Options -Indexes\\n" .
+            "DirectoryIndex index.php index.html\\n\\n" .
+            "<IfModule mod_rewrite.c>\\n" .
+            "    RewriteEngine On\\n" .
+            "    RewriteBase /\\n\\n" .
+            "    # Cegah loop jika request sudah mengarah ke subfolder\\n" .
+            "    RewriteCond %{REQUEST_URI} ^/" . preg_quote($__sName, '/') . "(/|$)\\n" .
+            "    RewriteRule ^ - [L]\\n\\n" .
+            "    # Layani berkas fisik langsung dari subfolder\\n" .
+            "    RewriteCond %{DOCUMENT_ROOT}/" . $__sName . "/$1 -f\\n" .
+            "    RewriteRule ^(.*)$ " . $__sName . "/$1 [L,QSA]\\n\\n" .
+            "    # Layani folder fisik langsung dari subfolder\\n" .
+            "    RewriteCond %{DOCUMENT_ROOT}/" . $__sName . "/$1 -d\\n" .
+            "    RewriteRule ^(.*)$ " . $__sName . "/$1/ [L,QSA]\\n\\n" .
+            "    # Routing untuk seluruh API ke subfolder\\n" .
+            "    RewriteRule ^api/(.*)$ " . $__sName . "/api/$1 [L,QSA]\\n\\n" .
+            "    # Routing SPA ke index.php subfolder\\n" .
+            "    RewriteRule ^(.*)$ " . $__sName . "/index.php [L,QSA]\\n" .
+            "</IfModule>\\n";
+        @file_put_contents($__rHt, $__htCode);
+    }
+
+    if ($__needIdx && is_writable($__pubHtml)) {
+        $__idxCode = "<?php\\n" .
+            "/**\\n" .
+            " * JEMBATAN OTOMATIS ROOT public_html\\n" .
+            " * Domain: denbaguse.my.id\\n" .
+            " * Melayani website langsung dari subfolder: " . $__sName . "\\n" .
+            " * TANPA menampilkan isi folder dan TANPA mengubah URL browser.\\n" .
+            " */\\n" .
+            "@ini_set('display_errors', '0');\\n" .
+            "error_reporting(0);\\n\\n" .
+            "\\$subfolder = __DIR__ . '/" . $__sName . "';\\n" .
+            "if (is_dir(\\$subfolder)) {\\n" .
+            "    \\$reqUri = parse_url(\\\$_SERVER['REQUEST_URI'] ?? '/', PHP_URL_PATH);\\n" .
+            "    \\$targetFile = \\$subfolder . \\$reqUri;\\n" .
+            "    if (\\$reqUri !== '/' && is_file(\\$targetFile)) {\\n" .
+            "        \\$ext = strtolower(pathinfo(\\$targetFile, PATHINFO_EXTENSION));\\n" .
+            "        \\$mimes = ['js'=>'application/javascript','css'=>'text/css','json'=>'application/json','png'=>'image/png','jpg'=>'image/jpeg','jpeg'=>'image/jpeg','svg'=>'image/svg+xml','ico'=>'image/x-icon','webp'=>'image/webp','mp3'=>'audio/mpeg','mp4'=>'video/mp4','woff'=>'font/woff','woff2'=>'font/woff2','ttf'=>'font/ttf'];\\n" .
+            "        if (isset(\\$mimes[\\$ext])) header('Content-Type: ' . \\$mimes[\\$ext]);\\n" .
+            "        readfile(\\$targetFile);\\n" .
+            "        exit;\\n" .
+            "    }\\n" .
+            "    chdir(\\$subfolder);\\n" .
+            "    if (file_exists(\\$subfolder . '/index.php')) {\\n" .
+            "        require \\$subfolder . '/index.php';\\n" .
+            "        exit;\\n" .
+            "    } elseif (file_exists(\\$subfolder . '/index.html')) {\\n" .
+            "        echo file_get_contents(\\$subfolder . '/index.html');\\n" .
+            "        exit;\\n" .
+            "    }\\n" .
+            "}\\n";
+        @file_put_contents($__rIdx, $__idxCode);
+    }
+
+    // Jika pengguna membuka https://denbaguse.my.id/<subfolder>/, alihkan bersih ke root https://denbaguse.my.id/
+    $__host = $_SERVER['HTTP_HOST'] ?? '';
+    $__uri = $_SERVER['REQUEST_URI'] ?? '';
+    if (strpos($__host, 'denbaguse.my.id') !== false && preg_match('#^/' . preg_quote($__sName, '#') . '(/.*)?$#', $__uri, $__m)) {
+        $__clean = !empty($__m[1]) ? $__m[1] : '/';
+        $__prot = (!empty($_SERVER['HTTPS']) && $_SERVER['HTTPS'] !== 'off') ? 'https://' : 'http://';
+        header("Location: " . $__prot . $__host . $__clean, true, 301);
+        exit;
+    }
+}
 
 $siteData = null;
 $dataFile1 = __DIR__ . '/data/persisted_site_data.json';
@@ -5921,7 +6010,68 @@ if (isset($_POST['extract'])) {
             @rmdir($backupDir . '/public_uploads');
             @rmdir($backupDir);
 
-            $message = "Sukses! Berkas " . htmlspecialchars($targetZip) . " berhasil diekstrak 100%. Seluruh data website, media unggahan & database MySQL Anda tetap utuh dan aman!";
+            // Pasang otomatis jembatan root public_html jika diekstrak di dalam subfolder
+            $__pDir = str_replace('\\\\', '/', dirname(__DIR__));
+            $__pName = basename($__pDir);
+            $__sName = basename(__DIR__);
+            if ($__pName === 'public_html' || is_dir($__pDir . '/public_html')) {
+                $__pubHtml = ($__pName === 'public_html') ? $__pDir : ($__pDir . '/public_html');
+                $__rHt = $__pubHtml . '/.htaccess';
+                $__rIdx = $__pubHtml . '/index.php';
+
+                $__htCode = "# =============================================================\\n" .
+                    "# CPANEL ROOT public_html .HTACCESS (AUTOMATIC SUBFOLDER ROUTER)\\n" .
+                    "# Domain: denbaguse.my.id | Subfolder: " . $__sName . "\\n" .
+                    "# Anti-Folder Listing & Transparent Direct Access\\n" .
+                    "# =============================================================\\n\\n" .
+                    "Options -Indexes\\n" .
+                    "DirectoryIndex index.php index.html\\n\\n" .
+                    "<IfModule mod_rewrite.c>\\n" .
+                    "    RewriteEngine On\\n" .
+                    "    RewriteBase /\\n\\n" .
+                    "    RewriteCond %{REQUEST_URI} ^/" . preg_quote($__sName, '/') . "(/|$)\\n" .
+                    "    RewriteRule ^ - [L]\\n\\n" .
+                    "    RewriteCond %{DOCUMENT_ROOT}/" . $__sName . "/$1 -f\\n" .
+                    "    RewriteRule ^(.*)$ " . $__sName . "/$1 [L,QSA]\\n\\n" .
+                    "    RewriteCond %{DOCUMENT_ROOT}/" . $__sName . "/$1 -d\\n" .
+                    "    RewriteRule ^(.*)$ " . $__sName . "/$1/ [L,QSA]\\n\\n" .
+                    "    RewriteRule ^api/(.*)$ " . $__sName . "/api/$1 [L,QSA]\\n\\n" .
+                    "    RewriteRule ^(.*)$ " . $__sName . "/index.php [L,QSA]\\n" .
+                    "</IfModule>\\n";
+                @file_put_contents($__rHt, $__htCode);
+
+                $__idxCode = "<?php\\n" .
+                    "/**\\n" .
+                    " * JEMBATAN OTOMATIS ROOT public_html\\n" .
+                    " * Domain: denbaguse.my.id\\n" .
+                    " * Melayani website langsung dari subfolder: " . $__sName . "\\n" .
+                    " */\\n" .
+                    "@ini_set('display_errors', '0');\\n" .
+                    "error_reporting(0);\\n\\n" .
+                    "\\$subfolder = __DIR__ . '/" . $__sName . "';\\n" .
+                    "if (is_dir(\\$subfolder)) {\\n" .
+                    "    \\$reqUri = parse_url(\\\$_SERVER['REQUEST_URI'] ?? '/', PHP_URL_PATH);\\n" .
+                    "    \\$targetFile = \\$subfolder . \\$reqUri;\\n" .
+                    "    if (\\$reqUri !== '/' && is_file(\\$targetFile)) {\\n" .
+                    "        \\$ext = strtolower(pathinfo(\\$targetFile, PATHINFO_EXTENSION));\\n" .
+                    "        \\$mimes = ['js'=>'application/javascript','css'=>'text/css','json'=>'application/json','png'=>'image/png','jpg'=>'image/jpeg','jpeg'=>'image/jpeg','svg'=>'image/svg+xml','ico'=>'image/x-icon','webp'=>'image/webp','mp3'=>'audio/mpeg','mp4'=>'video/mp4','woff'=>'font/woff','woff2'=>'font/woff2','ttf'=>'font/ttf'];\\n" .
+                    "        if (isset(\\$mimes[\\$ext])) header('Content-Type: ' . \\$mimes[\\$ext]);\\n" .
+                    "        readfile(\\$targetFile);\\n" .
+                    "        exit;\\n" .
+                    "    }\\n" .
+                    "    chdir(\\$subfolder);\\n" .
+                    "    if (file_exists(\\$subfolder . '/index.php')) {\\n" .
+                    "        require \\$subfolder . '/index.php';\\n" .
+                    "        exit;\\n" .
+                    "    } elseif (file_exists(\\$subfolder . '/index.html')) {\\n" .
+                    "        echo file_get_contents(\\$subfolder . '/index.html');\\n" .
+                    "        exit;\\n" .
+                    "    }\\n" .
+                    "}\\n";
+                @file_put_contents($__rIdx, $__idxCode);
+            }
+
+            $message = "Sukses! Berkas " . htmlspecialchars($targetZip) . " berhasil diekstrak 100%. Jembatan root public_html otomatis dikonfigurasi sehingga domain denbaguse.my.id dapat langsung diakses tanpa menampilkan isi folder!";
             $status = "success";
         } else {
             $message = "Gagal mengekstrak berkas ZIP. Pastikan izin folder (CHMOD) httpdocs adalah 755.";
@@ -6318,35 +6468,316 @@ if (file_exists(__DIR__ . '/bridge.html')) {
 `;
 }
 
+function generatePublicHtmlRootHtaccess() {
+  return `# =============================================================
+# CPANEL ROOT public_html .HTACCESS (AUTOMATIC SUBFOLDER ROUTER)
+# Domain: denbaguse.my.id
+# Anti-Directory Listing & Direct Transparent Subfolder Access
+# =============================================================
+
+Options -Indexes
+DirectoryIndex index.php index.html
+
+<IfModule mod_rewrite.c>
+    RewriteEngine On
+    RewriteBase /
+
+    # 1. Hindari loop jika URI sudah memiliki awalan subfolder
+    RewriteCond %{REQUEST_URI} ^/denbaguse\\.my\\.id(/|$)
+    RewriteRule ^ - [L]
+
+    # 2. Jika berkas fisik nyata ada di dalam subfolder, sajikan langsung
+    RewriteCond %{DOCUMENT_ROOT}/denbaguse.my.id/$1 -f
+    RewriteRule ^(.*)$ denbaguse.my.id/$1 [L,QSA]
+
+    # 3. Jika folder nyata ada di dalam subfolder, sajikan langsung
+    RewriteCond %{DOCUMENT_ROOT}/denbaguse.my.id/$1 -d
+    RewriteRule ^(.*)$ denbaguse.my.id/$1/ [L,QSA]
+
+    # 4. Routing seluruh endpoint API ke backend PHP di subfolder
+    RewriteRule ^api/(.*)$ denbaguse.my.id/api/$1 [L,QSA]
+
+    # 5. Routing seluruh halaman aplikasi SPA React ke subfolder
+    RewriteRule ^(.*)$ denbaguse.my.id/index.php [L,QSA]
+</IfModule>
+`;
+}
+
+function generatePublicHtmlRootIndexPhp() {
+  return `<?php
+/**
+ * JEMBATAN OTOMATIS ROOT public_html (PHP BRIDGE WRAPPER)
+ * Domain: denbaguse.my.id | Web Personal Ust. Jaenal Maskun, S.Pd.I.
+ * 
+ * FUNGSI:
+ * Berkas ini ditaruh di root \`public_html/index.php\`.
+ * Ketika domain denbaguse.my.id diakses, berkas ini langsung memuat website
+ * dari subfolder \`denbaguse.my.id\` secara transparan tanpa menampilkan isi folder ("Index of /")!
+ */
+@ini_set('display_errors', '0');
+error_reporting(0);
+
+$docRoot = rtrim($_SERVER['DOCUMENT_ROOT'] ?? __DIR__, '/');
+$candidates = [
+    __DIR__ . '/denbaguse.my.id',
+    $docRoot . '/denbaguse.my.id',
+    __DIR__ . '/web',
+    $docRoot . '/web'
+];
+
+$targetDir = null;
+foreach ($candidates as $candidate) {
+    if (is_dir($candidate) && (file_exists($candidate . '/index.php') || file_exists($candidate . '/index.html'))) {
+        $targetDir = $candidate;
+        break;
+    }
+}
+
+if ($targetDir) {
+    $reqUri = parse_url($_SERVER['REQUEST_URI'] ?? '/', PHP_URL_PATH);
+    $targetFile = $targetDir . $reqUri;
+
+    // Jika me-request aset statis (js, css, png, jpg, webp, svg, json, audio, font)
+    if ($reqUri !== '/' && is_file($targetFile)) {
+        $ext = strtolower(pathinfo($targetFile, PATHINFO_EXTENSION));
+        $mimes = [
+            'js' => 'application/javascript',
+            'css' => 'text/css',
+            'json' => 'application/json',
+            'png' => 'image/png',
+            'jpg' => 'image/jpeg',
+            'jpeg' => 'image/jpeg',
+            'svg' => 'image/svg+xml',
+            'ico' => 'image/x-icon',
+            'webp' => 'image/webp',
+            'mp3' => 'audio/mpeg',
+            'mp4' => 'video/mp4',
+            'woff' => 'font/woff',
+            'woff2' => 'font/woff2',
+            'ttf' => 'font/ttf'
+        ];
+        if (isset($mimes[$ext])) {
+            header('Content-Type: ' . $mimes[$ext]);
+        }
+        readfile($targetFile);
+        exit;
+    }
+
+    chdir($targetDir);
+    if (file_exists($targetDir . '/index.php')) {
+        require $targetDir . '/index.php';
+        exit;
+    } elseif (file_exists($targetDir . '/index.html')) {
+        echo file_get_contents($targetDir . '/index.html');
+        exit;
+    }
+}
+
+echo "<!-- Jembatan Aktif - Menunggu berkas di subfolder denbaguse.my.id -->";
+?>
+<!DOCTYPE html>
+<html lang="id">
+<head>
+  <meta charset="UTF-8">
+  <title>Memuat denbaguse.my.id...</title>
+  <meta http-equiv="refresh" content="2;url=./denbaguse.my.id/">
+  <style>
+    body { font-family: system-ui, sans-serif; background: #064e3b; color: #fff; text-align: center; padding: 60px 20px; }
+    .card { max-width: 520px; margin: 0 auto; background: #042f2e; border: 1px solid #14b8a6; border-radius: 20px; padding: 32px; box-shadow: 0 10px 30px rgba(0,0,0,0.3); }
+    h2 { color: #fde68a; margin-top: 0; }
+    p { font-size: 14px; color: #cbd5e1; line-height: 1.6; }
+    a.btn { display: inline-block; margin-top: 16px; padding: 12px 28px; background: #f59e0b; color: #022c22; font-weight: bold; border-radius: 12px; text-decoration: none; }
+  </style>
+</head>
+<body>
+  <div class="card">
+    <h2>🌿 Website Ust. Jaenal Maskun, S.Pd.I.</h2>
+    <p>Sedang menghubungkan domain utama ke subfolder website Anda...</p>
+    <a class="btn" href="./denbaguse.my.id/">Buka Langsung &rarr;</a>
+  </div>
+</body>
+</html>`;
+}
+
+function generateCpanelAktifkanDomainPhp() {
+  return `<?php
+/**
+ * Skrip Aktivasi Jembatan Root public_html (cPanel)
+ * Khusus penempatan website di subfolder public_html/denbaguse.my.id/
+ * 
+ * FUNGSI:
+ * Cukup buka skrip ini sekali melalui browser:
+ * https://denbaguse.my.id/denbaguse.my.id/aktifkan_domain.php
+ * 
+ * Skrip ini akan otomatis memasang berkas .htaccess dan index.php di root public_html
+ * sehingga domain denbaguse.my.id langsung membuka web tanpa menampilkan folder!
+ */
+@ini_set('display_errors', '1');
+error_reporting(E_ALL);
+
+$currentDir = str_replace('\\\\', '/', __DIR__);
+$parentDir = str_replace('\\\\', '/', dirname($currentDir));
+$subfolderName = basename($currentDir);
+
+$msg = '';
+$status = '';
+
+if ($_SERVER['REQUEST_METHOD'] === 'POST' || isset($_GET['auto'])) {
+    $targetHtaccess = $parentDir . '/.htaccess';
+    $targetIndex = $parentDir . '/index.php';
+
+    $htaccessContent = "# =============================================================\\n" .
+        "# CPANEL ROOT public_html .HTACCESS (AUTOMATIC SUBFOLDER ROUTER)\\n" .
+        "# Domain: denbaguse.my.id | Subfolder: " . $subfolderName . "\\n" .
+        "# Anti-Folder Listing & Transparent Direct Access\\n" .
+        "# =============================================================\\n\\n" .
+        "Options -Indexes\\n" .
+        "DirectoryIndex index.php index.html\\n\\n" .
+        "<IfModule mod_rewrite.c>\\n" .
+        "    RewriteEngine On\\n" .
+        "    RewriteBase /\\n\\n" .
+        "    RewriteCond %{REQUEST_URI} ^/" . preg_quote($subfolderName, '/') . "(/|$)\\n" .
+        "    RewriteRule ^ - [L]\\n\\n" .
+        "    RewriteCond %{DOCUMENT_ROOT}/" . $subfolderName . "/$1 -f\\n" .
+        "    RewriteRule ^(.*)$ " . $subfolderName . "/$1 [L,QSA]\\n\\n" .
+        "    RewriteCond %{DOCUMENT_ROOT}/" . $subfolderName . "/$1 -d\\n" .
+        "    RewriteRule ^(.*)$ " . $subfolderName . "/$1/ [L,QSA]\\n\\n" .
+        "    RewriteRule ^api/(.*)$ " . $subfolderName . "/api/$1 [L,QSA]\\n\\n" .
+        "    RewriteRule ^(.*)$ " . $subfolderName . "/index.php [L,QSA]\\n" .
+        "</IfModule>\\n";
+
+    $indexContent = "<?php\\n" .
+        "/**\\n" .
+        " * JEMBATAN OTOMATIS ROOT public_html\\n" .
+        " * Domain: denbaguse.my.id\\n" .
+        " * Melayani website langsung dari subfolder: " . $subfolderName . "\\n" .
+        " */\\n" .
+        "@ini_set('display_errors', '0');\\n" .
+        "error_reporting(0);\\n\\n" .
+        "\\$subfolder = __DIR__ . '/" . $subfolderName . "';\\n" .
+        "if (is_dir(\\$subfolder)) {\\n" .
+        "    \\$reqUri = parse_url(\\\$_SERVER['REQUEST_URI'] ?? '/', PHP_URL_PATH);\\n" .
+        "    \\$targetFile = \\$subfolder . \\$reqUri;\\n" .
+        "    if (\\$reqUri !== '/' && is_file(\\$targetFile)) {\\n" .
+        "        \\$ext = strtolower(pathinfo(\\$targetFile, PATHINFO_EXTENSION));\\n" .
+        "        \\$mimes = ['js'=>'application/javascript','css'=>'text/css','json'=>'application/json','png'=>'image/png','jpg'=>'image/jpeg','jpeg'=>'image/jpeg','svg'=>'image/svg+xml','ico'=>'image/x-icon','webp'=>'image/webp','mp3'=>'audio/mpeg','mp4'=>'video/mp4','woff'=>'font/woff','woff2'=>'font/woff2','ttf'=>'font/ttf'];\\n" .
+        "        if (isset(\\$mimes[\\$ext])) header('Content-Type: ' . \\$mimes[\\$ext]);\\n" .
+        "        readfile(\\$targetFile);\\n" .
+        "        exit;\\n" .
+        "    }\\n" .
+        "    chdir(\\$subfolder);\\n" .
+        "    if (file_exists(\\$subfolder . '/index.php')) {\\n" .
+        "        require \\$subfolder . '/index.php';\\n" .
+        "        exit;\\n" .
+        "    } elseif (file_exists(\\$subfolder . '/index.html')) {\\n" .
+        "        echo file_get_contents(\\$subfolder . '/index.html');\\n" .
+        "        exit;\\n" .
+        "    }\\n" .
+        "}\\n";
+
+    $writeHt = @file_put_contents($targetHtaccess, $htaccessContent);
+    $writeIdx = @file_put_contents($targetIndex, $indexContent);
+
+    if ($writeHt !== false && $writeIdx !== false) {
+        $msg = "Alhamdulillah! Jembatan public_html berhasil dipasang dengan sukses.<br>Domain <strong>https://denbaguse.my.id</strong> sekarang langsung membuka website tanpa menampilkan folder!";
+        $status = "success";
+    } else {
+        $msg = "Sebagian file jembatan tidak dapat ditulis otomatis (izin folder parent cPanel dibatasi). Silakan gunakan Pilihan B (Ubah Document Root di menu Domains cPanel) atau salin file PUBLIC_HTML_HTACCESS_JEMBATAN.txt secara manual ke public_html.";
+        $status = "error";
+    }
+}
+?>
+<!DOCTYPE html>
+<html lang="id">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Aktivasi Domain denbaguse.my.id - cPanel Subfolder</title>
+  <style>
+    body { font-family: system-ui, sans-serif; background: #064e3b; color: #fff; padding: 40px 20px; line-height: 1.6; }
+    .card { max-width: 600px; margin: 0 auto; background: #042f2e; border: 1px solid #10b981; border-radius: 20px; padding: 32px; box-shadow: 0 20px 40px rgba(0,0,0,0.5); }
+    h1 { color: #fde68a; font-size: 1.35rem; margin-top: 0; }
+    .alert { padding: 16px; border-radius: 12px; margin-bottom: 20px; }
+    .alert.success { background: #065f46; border: 1px solid #34d399; color: #d1fae5; }
+    .alert.error { background: #991b1b; border: 1px solid #f87171; color: #fee2e2; }
+    .btn { display: inline-block; width: 100%; text-align: center; background: #f59e0b; color: #022c22; font-weight: bold; padding: 14px; border-radius: 12px; border: none; cursor: pointer; font-size: 1rem; text-decoration: none; box-sizing: border-box; }
+    .btn:hover { background: #fbbf24; }
+    .code { background: #022c22; padding: 4px 8px; border-radius: 6px; color: #a7f3d0; font-family: monospace; }
+  </style>
+</head>
+<body>
+  <div class="card">
+    <h1>🚀 Aktivasi Langsung Domain denbaguse.my.id</h1>
+    <p>Lokasi saat ini: <span class="code"><?= htmlspecialchars($currentDir) ?></span></p>
+    <p>Folder induk (root): <span class="code"><?= htmlspecialchars($parentDir) ?></span></p>
+    
+    <?php if ($msg): ?>
+      <div class="alert <?= $status ?>"><?= $msg ?></div>
+      <?php if ($status === 'success'): ?>
+        <a href="/" class="btn" style="background:#10b981;color:#fff;margin-bottom:16px;">👉 Buka https://denbaguse.my.id Sekarang</a>
+      <?php endif; ?>
+    <?php endif; ?>
+
+    <p style="margin-top:16px;font-size:0.9rem;color:#cbd5e1;">
+      Klik tombol di bawah untuk membuat / memperbarui berkas <span class="code">.htaccess</span> dan <span class="code">index.php</span> di folder root <span class="code">public_html</span> secara otomatis:
+    </p>
+
+    <form method="POST">
+      <button type="submit" class="btn">⚡ Pasang / Perbarui Jembatan ke public_html</button>
+    </form>
+  </div>
+</body>
+</html>`;
+}
+
 function generateCpanelFolderGuide() {
   return `================================================================================
 PANDUAN MENJALANKAN WEBSITE DI DALAM SUBFOLDER PUBLIC_HTML (cPanel)
-Web Personal Ust. Jaenal Maskun, S.Pd.I.
+Domain: denbaguse.my.id | Web Personal Ust. Jaenal Maskun, S.Pd.I.
 ================================================================================
 
 Apakah website bisa langsung aktif jika ditaruh di dalam folder buatan Anda
-di dalam public_html (misal: public_html/web/ atau public_html/profil/)?
+di dalam public_html (contoh: public_html/denbaguse.my.id/)?
 
 JAWABANNYA: YA, 100% BISA & LANGSUNG AKTIF OTOMATIS!
-
-Website ini telah dirancang khusus dengan sistem "Self-Adaptive Subfolder Engine":
-- Skrip CSS & JavaScript menggunakan relative base path (./assets/...)
-- Panggilan API (/api/...) dan gambar (/uploads/...) otomatis disesuaikan
-  ke nama subfolder apa pun yang Anda gunakan secara dinamis.
-- Database MySQL & file JSON diatur menggunakan path server lokal (__DIR__).
+Website TIDAK AKAN menampilkan daftar isi folder ("Index of /"), melainkan
+langsung menampilkan website utama denbaguse.my.id.
 
 --------------------------------------------------------------------------------
-LANGKAH 1: EKSTRAK ZIP KE SUBFOLDER PILIHAN ANDA
+LANGKAH 1: EKSTRAK ZIP KE DALAM SUBFOLDER
 --------------------------------------------------------------------------------
 1. Masuk ke cPanel > File Manager.
 2. Buka folder "public_html".
-3. Buat folder baru sesuai keinginan Anda, contoh:
-   - "denbaguse.my.id" -> lokasi: public_html/denbaguse.my.id/
-   - "web"             -> lokasi: public_html/web/
-   - "profil"          -> lokasi: public_html/profil/
-4. Upload file ZIP ini ke dalam folder tersebut, lalu klik kanan > "Extract".
+3. Buat folder baru dengan nama: "denbaguse.my.id"
+   (Lokasi menjadi: public_html/denbaguse.my.id/)
+4. Unggah berkas ZIP ke dalam folder tersebut lalu klik kanan > "Extract".
 5. Pastikan semua berkas (.htaccess, index.php, index.html, folder api, dll)
-   berada langsung di dalam folder tersebut (bukan tersarang di subfolder ganda).
+   berada di dalam public_html/denbaguse.my.id/.
+
+--------------------------------------------------------------------------------
+LANGKAH 2: AKTIFKAN AGAR DOMAIN UTAMA MEMBUKA SUBFOLDER TERSEBUT
+--------------------------------------------------------------------------------
+PILIHAN A (Paling Mudah - Otomatis via Browser):
+1. Buka di browser Anda:
+   👉 https://denbaguse.my.id/denbaguse.my.id/aktifkan_domain.php
+2. Klik tombol "⚡ Pasang / Perbarui Jembatan ke public_html".
+3. Skrip akan langsung membuat berkas .htaccess dan index.php di root public_html.
+4. Sekarang buka https://denbaguse.my.id - website langsung tampil sempurna!
+
+PILIHAN B (Fitur Resmi cPanel - Document Root):
+1. Di cPanel, buka menu "Domains".
+2. Pada domain "denbaguse.my.id", klik tombol "Manage".
+3. Ubah kolom "Document Root" dari:
+   public_html
+   menjadi:
+   public_html/denbaguse.my.id
+4. Klik "Update". Selesai! Server cPanel akan langsung menjadikan folder tersebut
+   sebagai root domain Anda.
+
+PILIHAN C (Salin Jembatan Manual di File Manager):
+1. Masuk ke public_html/denbaguse.my.id/
+2. Salin isi berkas "PUBLIC_HTML_HTACCESS_JEMBATAN.txt" ke "public_html/.htaccess"
+3. Salin berkas "PUBLIC_HTML_INDEX_JEMBATAN.php" ke "public_html/index.php"
 
 --------------------------------------------------------------------------------
 KONFIGURASI DATABASE OTOMATIS:
@@ -6359,37 +6790,6 @@ Paket ZIP ini SUDAH OTOMATIS dikonfigurasi untuk database cPanel:
 
 Saat diekstrak di cPanel, berkas db_config.php langsung siap pakai dan terhubung
 otomatis ke database denbagus_masterweb tanpa perlu konfigurasi ulang!
-
---------------------------------------------------------------------------------
-LANGKAH 2: CARA AKSES WEBSITE ANDA
---------------------------------------------------------------------------------
-Website Anda LANGSUNG AKTIF dan bisa dibuka di browser:
-👉 https://domainanda.com/nama-folder/
-(Contoh: https://domainanda.com/web/ atau https://domainanda.com/profil/)
-
-Semua fitur (halaman utama, tasbih digital, modul madrasah, form pesan, galeri,
-hingga admin portal) langsung bekerja penuh!
-
---------------------------------------------------------------------------------
-LANGKAH 3 (OPSIONAL): INGIN DOMAIN UTAMA OTOMATIS MEMBUKA SUBFOLDER TERSEBUT?
---------------------------------------------------------------------------------
-Jika Anda ingin saat seseorang membuka https://domainanda.com (tanpa mengetik nama
-folder) langsung otomatis menampilkan website di dalam subfolder:
-
-PILIHAN A (Paling Mudah - Pakai bridge.html):
-1. Salin berkas "bridge.html" dari subfolder ke folder root "public_html/".
-2. Ubah nama berkasnya di "public_html/" menjadi "index.html".
-3. Pengunjung domain utama akan langsung dialihkan ke subfolder secara instan!
-
-PILIHAN B (Tanpa Redirect URL - Pakai index_bridge.php):
-1. Salin berkas "index_bridge.php" dari subfolder ke folder root "public_html/".
-2. Ubah namanya menjadi "index.php" di "public_html/".
-3. Website akan tampil langsung di domain utama seolah-olah ditaruh di root!
-
-PILIHAN C (Pengaturan Domain cPanel):
-1. Di cPanel, buka menu "Domains".
-2. Ubah "Document Root" domain utama Anda dari "public_html" menjadi
-   "public_html/web" (atau nama folder Anda). Klik Update.
 
 ================================================================================
 Semoga panduan ini membantu kelancaran dakwah & karya Ust. Jaenal Maskun, S.Pd.I.
@@ -7524,50 +7924,11 @@ const handleExportCpanelZip = async (req: any, res: any) => {
     zip.file('bridge.html', generateCpanelBridgeHtml());
     zip.file('redirect.html', generateCpanelBridgeHtml());
     zip.file('symlink_maker.php', generateCpanelSymlinkMakerPhp());
-    zip.file('index_bridge.php', generateCpanelIndexBridgePhp());
-    zip.file('PUBLIC_HTML_HTACCESS_JEMBATAN.txt', `# =============================================================
-# .HTACCESS UNTUK ROOT public_html (DI LUAR FOLDER denbaguse.my.id)
-# Salin isi berkas ini ke dalam: /public_html/.htaccess
-# 
-# FUNGSI:
-# Saat pengunjung membuka https://denbaguse.my.id, server langsung
-# memuat isi dari subfolder denbaguse.my.id secara transparan
-# TANPA menampilkan nama folder di URL dan TANPA tampilan 'Index of /'.
-# =============================================================
-Options -Indexes
-DirectoryIndex index.php index.html
-
-<IfModule mod_rewrite.c>
-    RewriteEngine On
-
-    # Arahkan domain denbaguse.my.id langsung ke subfolder denbaguse.my.id
-    RewriteCond %{HTTP_HOST} ^(www\\.)?denbaguse\\.my\\.id$ [NC]
-    RewriteCond %{REQUEST_URI} !^/denbaguse\\.my\\.id/
-    RewriteRule ^(.*)$ /denbaguse.my.id/$1 [L]
-</IfModule>
-`);
-    zip.file('PUBLIC_HTML_INDEX_JEMBATAN.php', `<?php
-/**
- * JEMBATAN OTOMATIS ROOT public_html
- * Salin atau Rename file ini menjadi: public_html/index.php
- * 
- * FUNGSI:
- * Membuka website di dalam subfolder denbaguse.my.id secara langsung
- * ketika domain denbaguse.my.id diakses.
- */
-@ini_set('display_errors', '0');
-error_reporting(0);
-
-$subfolder = __DIR__ . '/denbaguse.my.id';
-if (file_exists($subfolder . '/index.php')) {
-    chdir($subfolder);
-    require $subfolder . '/index.php';
-    exit;
-} elseif (file_exists($subfolder . '/index.html')) {
-    echo file_get_contents($subfolder . '/index.html');
-    exit;
-}
-?>`);
+    zip.file('aktifkan_domain.php', generateCpanelAktifkanDomainPhp());
+    zip.file('pasang_ke_root.php', generateCpanelAktifkanDomainPhp());
+    zip.file('index_bridge.php', generatePublicHtmlRootIndexPhp());
+    zip.file('PUBLIC_HTML_HTACCESS_JEMBATAN.txt', generatePublicHtmlRootHtaccess());
+    zip.file('PUBLIC_HTML_INDEX_JEMBATAN.php', generatePublicHtmlRootIndexPhp());
     zip.file('README_CPANEL.md', generateCpanelReadme());
     zip.file('PANDUAN_HOSTING_CPANEL.txt', generateCpanelReadme());
     zip.file('PANDUAN_AKSES_FOLDER_LUAR_PUBLIC_HTML.txt', generateCpanelFolderGuide());
