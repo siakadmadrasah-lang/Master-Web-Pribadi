@@ -260,6 +260,7 @@ export const BackupManager: React.FC<BackupManagerProps> = ({
   const [includeBase64InJson, setIncludeBase64InJson] = useState(false);
   const [isDownloadingJson, setIsDownloadingJson] = useState(false);
   const [isDownloadingZip, setIsDownloadingZip] = useState(false);
+  const [isDownloadingPleskZip, setIsDownloadingPleskZip] = useState(false);
   const [backupStatusText, setBackupStatusText] = useState<string | null>(null);
   const [previewAvatar, setPreviewAvatar] = useState<string | null>(null);
 
@@ -1344,6 +1345,26 @@ export const BackupManager: React.FC<BackupManagerProps> = ({
     }
   };
 
+  // Handler: Unduh Paket Siap Pakai Hosting Plesk (ZIP)
+  const handleDownloadPleskZip = async () => {
+    if (isDownloadingPleskZip) return;
+    setIsDownloadingPleskZip(true);
+    try {
+      const res = await fetch('/api/export-plesk-zip');
+      if (res.ok) {
+        const blob = await res.blob();
+        downloadBlobSafely(blob, 'Web-Personal-Ust-Jaenal-Plesk-Hosting.zip');
+        setRestoreSuccessMsg('Paket ZIP siap hosting Plesk berhasil diunduh!');
+      } else {
+        alert('Gagal mengunduh paket ZIP Plesk dari server.');
+      }
+    } catch (err: any) {
+      alert('Terjadi kesalahan jaringan saat mengunduh ZIP Plesk: ' + (err.message || 'Error'));
+    } finally {
+      setIsDownloadingPleskZip(false);
+    }
+  };
+
   // Handler: Create manual snapshot
   const handleCreateSnapshot = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -1752,6 +1773,16 @@ export const BackupManager: React.FC<BackupManagerProps> = ({
                   <Archive className={`w-4 h-4 ${isDownloadingZip ? 'animate-spin' : ''}`} />
                   <span>{isDownloadingZip ? 'Mengemas & Mengunduh ZIP...' : 'Unduh Paket Arsip ZIP'}</span>
                 </button>
+                <button
+                  type="button"
+                  onClick={handleDownloadPleskZip}
+                  disabled={isDownloadingPleskZip}
+                  className="w-full py-2.5 px-3 rounded-xl bg-amber-50 hover:bg-amber-100 text-emerald-950 border border-amber-300 text-xs font-bold flex items-center justify-center gap-1.5 transition-all active:scale-98 disabled:opacity-60 cursor-pointer"
+                  title="Unduh paket ZIP mandiri lengkap dengan PHP API, .htaccess, dan database.sql siap pasang di Plesk"
+                >
+                  <Download className={`w-3.5 h-3.5 text-amber-700 ${isDownloadingPleskZip ? 'animate-bounce' : ''}`} />
+                  <span>{isDownloadingPleskZip ? 'Mengemas Paket Plesk...' : 'Unduh Paket Siap Hosting Plesk (ZIP)'}</span>
+                </button>
                 <div className="text-center">
                   <a
                     href="/api/backup/zip-data"
@@ -2151,6 +2182,85 @@ export const BackupManager: React.FC<BackupManagerProps> = ({
       {activeSubTab === 'exports' && (
         <div className="space-y-6">
           <div className="grid grid-cols-1 md:grid-cols-2 gap-5">
+            {/* Paket Siap Pakai Hosting Plesk */}
+            <div className="bg-white p-6 rounded-3xl border-2 border-amber-300 shadow-sm flex flex-col justify-between space-y-4">
+              <div className="space-y-3">
+                <div className="w-12 h-12 rounded-2xl bg-amber-100 text-amber-900 flex items-center justify-center font-bold">
+                  <Archive className="w-6 h-6 text-amber-700" />
+                </div>
+                <div>
+                  <div className="flex items-center gap-1.5 mb-1">
+                    <span className="text-[10px] font-black px-2 py-0.5 rounded-full bg-amber-400 text-emerald-950 shadow-xs">
+                      Plesk &amp; Web Hosting Ready
+                    </span>
+                  </div>
+                  <h4 className="text-sm font-bold text-gray-900">Paket Siap Hosting Plesk (ZIP)</h4>
+                  <p className="text-xs text-gray-600 mt-1 leading-relaxed">
+                    Unduh 1 berkas ZIP mandiri berisi berkas web lengkap yang siap diekstrak langsung ke folder <code className="font-mono text-emerald-800 font-bold bg-amber-50 px-1 py-0.5 rounded border border-amber-200">httpdocs</code> di server Plesk Anda.
+                  </p>
+                </div>
+                <div className="p-3 bg-amber-50/70 rounded-xl border border-amber-200 text-[11px] text-amber-950 space-y-1">
+                  <span className="font-bold block">✓ Isi Lengkap Paket ZIP:</span>
+                  <p>Backend PHP API, database.sql, .htaccess, unzip.php auto-installer, skrip koneksi MySQL (db_config.php), dan seluruh aset web statis.</p>
+                </div>
+              </div>
+
+              <div className="space-y-2">
+                <button
+                  type="button"
+                  onClick={handleDownloadPleskZip}
+                  disabled={isDownloadingPleskZip}
+                  className="w-full py-3 px-4 rounded-xl bg-gradient-to-r from-amber-400 via-amber-300 to-amber-500 hover:from-amber-300 hover:to-amber-400 text-emerald-950 text-xs font-black flex items-center justify-center gap-2 shadow-md transition-all active:scale-98 disabled:opacity-60 cursor-pointer"
+                >
+                  <Download className={`w-4 h-4 text-emerald-950 ${isDownloadingPleskZip ? 'animate-bounce' : ''}`} />
+                  <span>{isDownloadingPleskZip ? 'Mengemas & Mengunduh ZIP...' : 'Unduh ZIP Plesk Siap Unggah'}</span>
+                </button>
+                <div className="text-center">
+                  <a
+                    href="/api/export-plesk-zip"
+                    download="Web-Personal-Ust-Jaenal-Plesk-Hosting.zip"
+                    className="inline-flex items-center gap-1 text-[11px] font-semibold text-emerald-800 hover:text-emerald-950 underline hover:no-underline"
+                  >
+                    <span>Atau unduh langsung via tautan server</span>
+                    <ExternalLink className="w-3 h-3" />
+                  </a>
+                </div>
+              </div>
+            </div>
+
+            {/* Ekspor Database MySQL (database.sql) */}
+            <div className="bg-white p-6 rounded-3xl border-2 border-emerald-300 shadow-sm flex flex-col justify-between space-y-4">
+              <div className="space-y-3">
+                <div className="w-12 h-12 rounded-2xl bg-emerald-100 text-emerald-900 flex items-center justify-center font-bold">
+                  <Database className="w-6 h-6 text-emerald-700" />
+                </div>
+                <div>
+                  <div className="flex items-center gap-1.5 mb-1">
+                    <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-emerald-100 text-emerald-900">
+                      MySQL Script
+                    </span>
+                  </div>
+                  <h4 className="text-sm font-bold text-gray-900">Ekspor Skrip Database (database.sql)</h4>
+                  <p className="text-xs text-gray-600 mt-1 leading-relaxed">
+                    Unduh skrip dump SQL mandiri berisi seluruh data tabel profil, artikel, agenda, galeri, dan kredensial admin yang siap diimpor ke phpMyAdmin.
+                  </p>
+                </div>
+                <div className="p-3 bg-emerald-50 rounded-xl border border-emerald-200 text-[11px] text-emerald-900 space-y-1">
+                  <span className="font-bold block">✓ Siap Impor:</span>
+                  <p>Format standar MySQL InnoDB UTF-8, dapat langsung diimpor melalui phpMyAdmin atau MySQL CLI.</p>
+                </div>
+              </div>
+
+              <a
+                href="/api/export-sql"
+                download="database.sql"
+                className="w-full py-3 px-4 rounded-xl bg-emerald-800 hover:bg-emerald-700 text-white text-xs font-bold flex items-center justify-center gap-2 shadow-md transition-all text-center block"
+              >
+                <Database className="w-4 h-4 text-amber-300 inline" />
+                <span>Unduh Berkas database.sql</span>
+              </a>
+            </div>
+
             {/* Export Messages to CSV */}
             <div className="bg-white p-6 rounded-3xl border-2 border-emerald-200 shadow-sm flex flex-col justify-between space-y-4 md:col-span-2">
               <div className="space-y-3">

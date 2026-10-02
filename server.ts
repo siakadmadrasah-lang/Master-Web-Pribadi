@@ -9,6 +9,16 @@ import dotenv from 'dotenv';
 import sharp from 'sharp';
 import multer from 'multer';
 import { createServer as createViteServer } from 'vite';
+import {
+  generatePleskDbConfigPhp,
+  generatePleskHtaccess,
+  generatePleskIndexPhp,
+  generatePleskUnzipPhp,
+  generatePleskReadme,
+  generatePleskApiSiteDataPhp,
+  generatePleskApiAdminLoginPhp,
+  generatePleskApiSyncToMysqlPhp
+} from './src/utils/pleskHelper';
 
 dotenv.config();
 
@@ -4792,6 +4802,112 @@ app.get("/api/export-sql", (req, res) => {
   res.setHeader("Content-Disposition", "attachment; filename=\"database.sql\"");
   res.send(sql);
 });
+
+// Unduh Paket Siap Hosting Plesk (ZIP Mandiri)
+const handleExportPleskZip = async (req: express.Request, res: express.Response) => {
+  try {
+    const currentData = cachedSiteData || loadSiteDataFromFile();
+    const zip = new JSZip();
+
+    // 1. Root Database & Config files
+    zip.file('database.sql', generateSqlContent(currentData));
+    zip.file('db_config.php', generatePleskDbConfigPhp());
+    zip.file('.htaccess', generatePleskHtaccess());
+    zip.file('index.php', generatePleskIndexPhp());
+    zip.file('unzip.php', generatePleskUnzipPhp());
+    zip.file('README_PLESK.md', generatePleskReadme());
+    zip.file('PANDUAN_HOSTING_PLESK.txt', generatePleskReadme());
+
+    // Also include app.js for Plesk Node.js option
+    zip.file('app.js', `// Plesk Node.js Startup File
+process.env.NODE_ENV = process.env.NODE_ENV || 'production';
+process.env.PORT = process.env.PORT || 3000;
+require('./dist/server.cjs');
+`);
+
+    // 2. Folder api/
+    const apiFolder = zip.folder('api');
+    if (apiFolder) {
+      apiFolder.file('site-data.php', generatePleskApiSiteDataPhp());
+      apiFolder.file('site-content.php', generatePleskApiSiteDataPhp());
+      apiFolder.file('sync-to-mysql.php', generatePleskApiSyncToMysqlPhp());
+      apiFolder.file('admin-login.php', generatePleskApiAdminLoginPhp());
+      apiFolder.file('db_config.php', generatePleskDbConfigPhp());
+    }
+
+    // 3. Folder data/
+    const dataFolder = zip.folder('data');
+    if (dataFolder) {
+      dataFolder.file('site_data.default.json', JSON.stringify(currentData, null, 2));
+      dataFolder.file('messages.default.json', JSON.stringify([], null, 2));
+      dataFolder.file('mysql_config.default.json', JSON.stringify(currentMySQLConfig, null, 2));
+      dataFolder.file('PERLINDUNGAN_DATA_PLESK.txt', `SISTEM ANTI DATA-LOSS AKTIF:
+Berkas data live (persisted_site_data.json, messages.json, db_config.local.php) di server hosting Plesk Anda dijamin aman.`);
+    }
+
+    // 4. Uploads directory (active media)
+    const uploadsDir = fs.existsSync(UPLOADS_PUBLIC_DIR)
+      ? UPLOADS_PUBLIC_DIR
+      : fs.existsSync(UPLOADS_DATA_DIR)
+      ? UPLOADS_DATA_DIR
+      : null;
+
+    const activeMediaFiles = getReferencedMediaSet(currentData);
+    if (uploadsDir && fs.existsSync(uploadsDir)) {
+      const uploadsFolder = zip.folder('uploads');
+      const uploadFiles = fs.readdirSync(uploadsDir);
+      for (const file of uploadFiles) {
+        if (!activeMediaFiles.has(file)) continue;
+        const filePath = path.join(uploadsDir, file);
+        if (fs.statSync(filePath).isFile()) {
+          uploadsFolder?.file(file, fs.readFileSync(filePath));
+        }
+      }
+    }
+
+    // 5. Static dist bundle if available
+    const distPath = path.join(process.cwd(), 'dist');
+    if (fs.existsSync(distPath)) {
+      const addFolderToZip = (dirPath: string, zipNode: JSZip) => {
+        const items = fs.readdirSync(dirPath);
+        for (const item of items) {
+          if (item === 'uploads' || item === 'assets/uploads' || item.endsWith('.zip')) continue;
+          const fullPath = path.join(dirPath, item);
+          const stat = fs.statSync(fullPath);
+          if (stat.isDirectory()) {
+            const subZip = zipNode.folder(item);
+            if (subZip) addFolderToZip(fullPath, subZip);
+          } else {
+            zipNode.file(item, fs.readFileSync(fullPath));
+          }
+        }
+      };
+      addFolderToZip(distPath, zip);
+    } else {
+      const indexPath = path.join(process.cwd(), 'index.html');
+      if (fs.existsSync(indexPath)) {
+        zip.file('index.html', fs.readFileSync(indexPath, 'utf-8'));
+      }
+    }
+
+    const zipBuffer = await zip.generateAsync({
+      type: 'nodebuffer',
+      compression: 'DEFLATE',
+      compressionOptions: { level: 6 }
+    });
+
+    res.setHeader('Content-Type', 'application/zip');
+    res.setHeader('Content-Disposition', 'attachment; filename="Web-Personal-Ust-Jaenal-Plesk-Hosting.zip"');
+    res.setHeader('Content-Length', zipBuffer.length);
+    res.send(zipBuffer);
+  } catch (err: any) {
+    console.error('Error generating Plesk ZIP:', err);
+    res.status(500).json({ success: false, error: err.message || 'Gagal membuat paket ZIP Plesk' });
+  }
+};
+
+app.get('/api/export-plesk-zip', handleExportPleskZip);
+app.post('/api/export-plesk-zip', handleExportPleskZip);
 
 
 // -------------------------------------------------------------
