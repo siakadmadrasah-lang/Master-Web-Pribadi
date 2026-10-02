@@ -559,7 +559,7 @@ export function parseYouTubeRssXmlClient(xmlText: string): any[] {
 
 /**
  * Universal multi-tier YouTube video fetcher
- * Works across local Node server, Plesk static hosting, cPanel, and direct client browser!
+ * Works across local Node server, web hosting, and direct client browser!
  */
 export async function fetchYouTubeVideosUniversal(channelInput?: string): Promise<{
   success: boolean;

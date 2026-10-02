@@ -36,8 +36,6 @@ import {
   ExternalLink
 } from 'lucide-react';
 import { BackupSnapshot, BackupStats, FullBackupBundle, SiteContentConfig, HeaderLogoConfig, StickyFooterConfig } from '../types';
-import { downloadPleskPackageZip, triggerZipDownload } from '../utils/pleskExporter';
-import { downloadCpanelPackageZip } from '../utils/cpanelExporter';
 import { generateDatabaseSql } from '../utils/sqlGenerator';
 import { embedMediaInSiteData, base64ToUint8Array, deepResolveMediaUrls, collectAllMediaAssetsForZip } from '../utils/mediaBackupHelper';
 
@@ -48,7 +46,6 @@ interface BackupManagerProps {
   stickyFooterConfig?: StickyFooterConfig;
   onSaveLogoConfig?: (cfg: HeaderLogoConfig) => void;
   onSaveStickyFooterConfig?: (cfg: StickyFooterConfig) => void;
-  onOpenCpanelTab?: () => void;
 }
 
 // Helper: Download Blob safely in mobile and desktop browsers
@@ -237,8 +234,7 @@ export const BackupManager: React.FC<BackupManagerProps> = ({
   logoConfig,
   stickyFooterConfig,
   onSaveLogoConfig,
-  onSaveStickyFooterConfig,
-  onOpenCpanelTab
+  onSaveStickyFooterConfig
 }) => {
   const [activeSubTab, setActiveSubTab] = useState<'overview' | 'restore' | 'snapshots' | 'exports'>('overview');
   
@@ -266,9 +262,6 @@ export const BackupManager: React.FC<BackupManagerProps> = ({
   const [isDownloadingZip, setIsDownloadingZip] = useState(false);
   const [backupStatusText, setBackupStatusText] = useState<string | null>(null);
   const [previewAvatar, setPreviewAvatar] = useState<string | null>(null);
-  const [isDownloadingCpanelZip, setIsDownloadingCpanelZip] = useState(false);
-  const [isExportingPlesk, setIsExportingPlesk] = useState(false);
-  const [pleskProgress, setPleskProgress] = useState<{ percent: number; message: string } | null>(null);
 
   // Media storage stats & orphan cleanup state
   const [mediaStats, setMediaStats] = useState<{
@@ -835,14 +828,14 @@ export const BackupManager: React.FC<BackupManagerProps> = ({
           if (res.ok && jsonRes?.success) {
             resultData = jsonRes;
           } else {
-            console.warn('Endpoint /api/backup/restore-zip server terhambat (biasanya karena batas ukuran upload cPanel/hosting). Mengaktifkan Pemulihan Cerdas Otomatis...', jsonRes?.error || `HTTP ${res.status}`);
+            console.warn('Endpoint /api/backup/restore-zip server terhambat (biasanya karena batas ukuran upload server hosting). Mengaktifkan Pemulihan Cerdas Otomatis...', jsonRes?.error || `HTTP ${res.status}`);
           }
         } catch (zipErr: any) {
           console.warn('Upload ZIP ke server timeout atau terputus. Mengaktifkan Pemulihan Cerdas Otomatis...', zipErr);
         }
       }
 
-      // 2. Intelligent Direct Restore Fallback (Bypasses cPanel zip upload limits)
+      // 2. Intelligent Direct Restore Fallback (Bypasses server zip upload limits)
       if (!resultData && selectedFile) {
         // Step 2A: Upload media files one-by-one if ZIP without keeping all base64 in memory
         if (parsedRestoreData._fileType === 'zip') {
@@ -1333,7 +1326,7 @@ export const BackupManager: React.FC<BackupManagerProps> = ({
         }
       }
 
-      zip.file('README_CADANGAN.txt', `PAKET CADANGAN LENGKAP WEB UST. JAENAL MASKUN\nTanggal Ekspor: ${new Date().toLocaleString('id-ID')}\nTotal Foto/Media Disematkan: ${inlinedMediaCount}\nOptimasi: Berkas video besar (>15MB) dilewati agar hemat kuota & super cepat di HP.\nKompatibilitas: Android, iPhone, Windows, Mac & Hosting cPanel/Plesk.`);
+      zip.file('README_CADANGAN.txt', `PAKET CADANGAN LENGKAP WEB UST. JAENAL MASKUN\nTanggal Ekspor: ${new Date().toLocaleString('id-ID')}\nTotal Foto/Media Disematkan: ${inlinedMediaCount}\nOptimasi: Berkas video besar (>15MB) dilewati agar hemat kuota & super cepat di HP.\nKompatibilitas: Android, iPhone, Windows, Mac & Seluruh Server Hosting.`);
 
       // Use fast STORE or low DEFLATE level to prevent high CPU/RAM spikes on phones
       const zipBlob = await zip.generateAsync({
@@ -1348,19 +1341,6 @@ export const BackupManager: React.FC<BackupManagerProps> = ({
     } finally {
       setIsDownloadingZip(false);
       setBackupStatusText(null);
-    }
-  };
-
-  // Handler: Download cPanel ZIP
-  const handleDownloadCpanelZip = async () => {
-    setIsDownloadingCpanelZip(true);
-    try {
-      const blob = await downloadCpanelPackageZip(siteContent, logoConfig, stickyFooterConfig);
-      triggerZipDownload(blob, 'Web-Personal-Ust-Jaenal-cPanel-Hosting.zip');
-    } catch (e) {
-      alert('Gagal membuat paket ZIP cPanel.');
-    } finally {
-      setIsDownloadingCpanelZip(false);
     }
   };
 
@@ -1844,7 +1824,7 @@ export const BackupManager: React.FC<BackupManagerProps> = ({
                   ⚡ Pulihkan Data Langsung dari Memori Browser Ini
                 </h4>
                 <p className="text-xs text-emerald-100/90 leading-relaxed max-w-xl">
-                  Jika Anda baru saja menimpa berkas hosting Plesk/cPanel dan data tampak kembali ke awal, tekan tombol di bawah. Sistem akan mengambil data terakhir yang tersimpan di browser ini dan langsung menguncinya ke database MySQL server.
+                  Jika Anda baru saja memperbarui berkas server dan data tampak kembali ke awal, tekan tombol di bawah. Sistem akan mengambil data terakhir yang tersimpan di browser ini dan langsung menguncinya ke database MySQL server.
                 </p>
               </div>
               <button
@@ -2171,54 +2151,14 @@ export const BackupManager: React.FC<BackupManagerProps> = ({
       {activeSubTab === 'exports' && (
         <div className="space-y-6">
           <div className="grid grid-cols-1 md:grid-cols-2 gap-5">
-            {/* cPanel Hosting ZIP */}
-            <div className="bg-white p-6 rounded-3xl border-2 border-orange-200 shadow-sm flex flex-col justify-between space-y-4">
-              <div className="space-y-3">
-                <div className="w-12 h-12 rounded-2xl bg-orange-100 text-orange-900 flex items-center justify-center font-bold">
-                  <FolderArchive className="w-6 h-6 text-orange-600" />
-                </div>
-                <div>
-                  <h4 className="text-sm font-bold text-gray-900">1. Paket Hosting cPanel (public_html)</h4>
-                  <p className="text-xs text-gray-600 mt-1 leading-relaxed">
-                    Paket berkas lengkap yang siap diekstrak langsung ke dalam folder <code className="font-mono text-orange-700">public_html</code> pada server hosting cPanel Anda.
-                  </p>
-                </div>
-                <div className="p-3 bg-orange-50 rounded-xl border border-orange-200 text-[11px] text-orange-950 space-y-1">
-                  <span className="font-bold block">✓ Isi Paket cPanel:</span>
-                  <p>Backend PHP API, database.sql, .htaccess mod_rewrite, unzip.php helper, dan berkas statis web.</p>
-                </div>
-              </div>
-
-              <div className="space-y-2">
-                <button
-                  type="button"
-                  onClick={handleDownloadCpanelZip}
-                  disabled={isDownloadingCpanelZip}
-                  className="w-full py-3 px-4 rounded-xl bg-gradient-to-r from-orange-500 to-amber-500 hover:from-orange-400 hover:to-amber-400 text-slate-950 text-xs font-black flex items-center justify-center gap-2 shadow-md transition-all active:scale-98 disabled:opacity-60 cursor-pointer"
-                >
-                  <Download className={`w-4 h-4 ${isDownloadingCpanelZip ? 'animate-bounce' : ''}`} />
-                  <span>{isDownloadingCpanelZip ? 'Mengemas Paket cPanel...' : 'Unduh Paket ZIP cPanel'}</span>
-                </button>
-                {onOpenCpanelTab && (
-                  <button
-                    type="button"
-                    onClick={onOpenCpanelTab}
-                    className="w-full py-2 px-3 rounded-xl bg-orange-50 hover:bg-orange-100 text-orange-900 text-xs font-bold flex items-center justify-center gap-1.5 transition-all cursor-pointer"
-                  >
-                    <span>Buka Panduan & Modul cPanel Penuh</span>
-                  </button>
-                )}
-              </div>
-            </div>
-
             {/* Export Messages to CSV */}
-            <div className="bg-white p-6 rounded-3xl border-2 border-emerald-200 shadow-sm flex flex-col justify-between space-y-4">
+            <div className="bg-white p-6 rounded-3xl border-2 border-emerald-200 shadow-sm flex flex-col justify-between space-y-4 md:col-span-2">
               <div className="space-y-3">
                 <div className="w-12 h-12 rounded-2xl bg-emerald-100 text-emerald-900 flex items-center justify-center font-bold">
                   <FileSpreadsheet className="w-6 h-6 text-emerald-800" />
                 </div>
                 <div>
-                  <h4 className="text-sm font-bold text-gray-900">2. Ekspor Arsip Pesan Masuk (CSV)</h4>
+                  <h4 className="text-sm font-bold text-gray-900">Ekspor Arsip Pesan Masuk (CSV)</h4>
                   <p className="text-xs text-gray-600 mt-1 leading-relaxed">
                     Unduh seluruh rekap formulir pesan masuk, undangan pengajian, seminar, dan kontak masyarakat dalam format spreadsheet Excel/CSV.
                   </p>
