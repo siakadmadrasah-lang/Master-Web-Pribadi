@@ -23,6 +23,19 @@ export async function convertUrlToBase64(url: string, timeoutMs = 4500): Promise
     return trimmed;
   }
 
+  // JANGAN PERNAH konversi link YouTube, TikTok, Vimeo, Drive, atau video fisik (.mp4/.webm) ke Base64!
+  // Link YouTube sudah aman tersimpan sebagai URL ringan (beberapa byte teks)
+  if (
+    trimmed.includes('youtube.com') ||
+    trimmed.includes('youtu.be') ||
+    trimmed.includes('tiktok.com') ||
+    trimmed.includes('drive.google.com') ||
+    trimmed.includes('vimeo.com') ||
+    /\.(mp4|webm|mov|mkv|avi|3gp|flv|m4v|wmv|ogg|ts)(\?.*)?$/i.test(trimmed)
+  ) {
+    return trimmed;
+  }
+
   // Cek cache
   if (base64Cache.has(trimmed)) {
     return base64Cache.get(trimmed)!;
@@ -37,6 +50,11 @@ export async function convertUrlToBase64(url: string, timeoutMs = 4500): Promise
 
     if (res.ok) {
       const blob = await res.blob();
+      // Batasi ukuran maksimal 5MB agar tidak menyebabkan memory crash di HP Android
+      if (blob.size > 5 * 1024 * 1024) {
+        return trimmed;
+      }
+
       const base64 = await new Promise<string>((resolve) => {
         const reader = new FileReader();
         reader.onloadend = () => {
@@ -57,7 +75,7 @@ export async function convertUrlToBase64(url: string, timeoutMs = 4500): Promise
 
   // 2. Fallback khusus file gambar via HTMLImageElement dan Canvas
   const isLikelyImage = /\.(jpg|jpeg|png|webp|gif|svg|ico)(\?.*)?$/i.test(trimmed) ||
-    trimmed.includes('/uploads/') ||
+    (trimmed.includes('/uploads/') && !/\.(mp4|webm|mov|mkv|avi|3gp|flv|m4v|wmv)(\?.*)?$/i.test(trimmed)) ||
     trimmed.includes('avatar') ||
     trimmed.includes('hero') ||
     trimmed.includes('logo');
@@ -135,7 +153,28 @@ function isMediaUrlString(val: any, keyName = ''): boolean {
   const str = val.trim();
   if (str.startsWith('data:')) return false;
 
+  // JANGAN PERNAH convert video fisik atau platform streaming (YouTube, TikTok, Vimeo, Drive) ke Base64!
+  if (
+    str.includes('youtube.com') ||
+    str.includes('youtu.be') ||
+    str.includes('ytimg.com') ||
+    str.includes('ggpht.com') ||
+    str.includes('tiktok.com') ||
+    str.includes('drive.google.com') ||
+    str.includes('vimeo.com') ||
+    str.includes('unsplash.com') ||
+    str.includes('googleusercontent.com') ||
+    /\.(mp4|webm|mov|mkv|avi|3gp|flv|m4v|wmv|ogg|ts)(\?.*)?$/i.test(str)
+  ) {
+    return false;
+  }
+
   const lowerKey = keyName.toLowerCase();
+  // Exclude video-related field keys
+  if (lowerKey.includes('video') || lowerKey === 'embedurl' || lowerKey === 'channelurl') {
+    return false;
+  }
+
   const knownMediaKeys = [
     'avatarurl', 'avatar', 'heroimage', 'imageurl', 'image', 'coverurl', 'cover',
     'logourl', 'customlogourl', 'faviconurl', 'flyerurl', 'flyer', 'iconurl', 'icon',
@@ -144,13 +183,13 @@ function isMediaUrlString(val: any, keyName = ''): boolean {
   ];
 
   if (knownMediaKeys.includes(lowerKey)) {
-    return str.length > 2 && (str.startsWith('/') || str.startsWith('http') || str.includes('.'));
+    // Only embed local upload assets or relative paths, never external cloud URLs
+    return str.length > 2 && (str.startsWith('/') || str.startsWith('./') || str.startsWith('uploads/')) && !str.startsWith('http://') && !str.startsWith('https://');
   }
 
   return /\.(jpg|jpeg|png|webp|gif|svg|ico|pdf|bmp)(\?.*)?$/i.test(str) ||
-    str.startsWith('/uploads/') ||
-    str.startsWith('uploads/') ||
-    str.startsWith('/assets/uploads/');
+    ((str.startsWith('/uploads/') || str.startsWith('uploads/') || str.startsWith('/assets/uploads/')) &&
+     !/\.(mp4|webm|mov|mkv|avi|3gp|flv|m4v|wmv)$/i.test(str));
 }
 
 /**

@@ -32,11 +32,11 @@ import { generateCpanelHtaccess, generateCpanelReadme, generatePhpIniConfig } fr
 
 dotenv.config();
 
-const __filenameResolved = typeof __filename !== 'undefined' ? __filename : (typeof import.meta !== 'undefined' && (import.meta as any).url ? fileURLToPath((import.meta as any).url) : process.cwd());
+const __filenameResolved = typeof __filename !== 'undefined' ? __filename : process.cwd();
 const __dirnameResolved = typeof __dirname !== 'undefined' ? __dirname : path.dirname(__filenameResolved);
 
 const app = express();
-const PORT = 3000;
+const PORT = process.env.PORT || 3000;
 
 // Universal CORS & Network Header Middleware
 app.use((req, res, next) => {
@@ -8193,9 +8193,16 @@ async function startServer() {
     });
   }
 
-  app.listen(PORT, '0.0.0.0', () => {
-    console.log(`Madrasah Personal Website Server running at http://0.0.0.0:${PORT}`);
-  });
+  if (typeof PORT === 'string' && isNaN(Number(PORT))) {
+    app.listen(PORT, () => {
+      console.log(`Madrasah Personal Website Server running on socket/pipe: ${PORT}`);
+    });
+  } else {
+    const numericPort = typeof PORT === 'string' ? parseInt(PORT, 10) : PORT;
+    app.listen(numericPort, '0.0.0.0', () => {
+      console.log(`Madrasah Personal Website Server running at http://0.0.0.0:${numericPort}`);
+    });
+  }
 }
 
 startServer();
